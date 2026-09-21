@@ -1,0 +1,19 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pillow = "*"
+python-multipart = "*"
+openpyxl = "*"
+defusedxml = "*"
+psycopg = {extras = ["binary", "pool"], version = "*"}
+fastapi = "*"
+uvicorn = "*"
+httpx = "*"
+
+[requires]
+python_version = "3.14"
+
+[dev-packages]
