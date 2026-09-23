@@ -12,7 +12,7 @@ from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
-MAX_TEXT_CHARS = 30000
+MAX_TEXT_CHARS = 300000
 MAX_FILES = 5
 MAX_IMAGE_PIXELS = 20_000_000
 IMAGE_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG"}
