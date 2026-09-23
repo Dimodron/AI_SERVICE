@@ -74,7 +74,7 @@ def extract_text(content: bytes, suffix: str) -> str:
                     line = '\t'.join('' if value is None else str(value) for value in row)
                     length += len(line) + 1
                     if length > MAX_TEXT_CHARS:
-                        raise HTTPException(413, 'Текст файла превышает 12000 символов')
+                        raise HTTPException(413, f'Текст файла превышает {MAX_TEXT_CHARS} символов')
                     lines.append(line)
         finally:
             workbook.close()
@@ -82,7 +82,7 @@ def extract_text(content: bytes, suffix: str) -> str:
     if not text.strip():
         raise HTTPException(422, 'Файл не содержит текста для анализа')
     if len(text) > MAX_TEXT_CHARS:
-        raise HTTPException(413, 'Текст файла превышает 12000 символов')
+        raise HTTPException(413, f'Текст файла превышает {MAX_TEXT_CHARS} символов')
     return text
 
 
@@ -155,7 +155,7 @@ async def file_context(connection, file_ids: list[UUID], conversation_id: UUID |
     if len(records) != len(identifiers):
         raise HTTPException(404, 'Один из файлов не найден')
     if sum(len(row['extracted_text']) for row in records.values()) > MAX_TEXT_CHARS:
-        raise HTTPException(413, 'Общий текст прикреплённых файлов превышает 12000 символов')
+        raise HTTPException(413, f'Общий текст прикреплённых файлов превышает {MAX_TEXT_CHARS} символов')
     new_ids = [file_id for file_id in identifiers if file_id not in existing]
     if conversation_id and new_ids:
         async with connection.cursor() as cursor:
