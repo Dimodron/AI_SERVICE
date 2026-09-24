@@ -1,5 +1,6 @@
 from datetime import datetime
 from uuid import UUID
+from schemas.reports import ReportResponse
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, model_validator
@@ -39,7 +40,12 @@ class GenerateResponse(BaseModel):
     response: str = Field(description="Конечный ответ модели без текста рассуждений.")
 
 
-class ChatCreateRequest(BaseModel):
+class ChatOwner(BaseModel):
+    user_login: str = Field(min_length=1, max_length=200)
+    user_jurpers: int = Field(strict=True, ge=-(2**63), le=2**63 - 1)
+
+
+class ChatCreateRequest(ChatOwner):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     model: str | None = Field(default=None, min_length=1, description="Модель диалога. По умолчанию первая доступная модель Ollama.")
@@ -50,6 +56,7 @@ class ChatCreateResponse(BaseModel):
     model: str
     title: str | None
     created_at: datetime
+    last_message_at: datetime | None = None
 
 
 class ChatRequest(GenerationSettings):
@@ -74,13 +81,14 @@ class ChatRequest(GenerationSettings):
         return self
 
 class ChatResponse(BaseModel):
+    files: list[ReportResponse] = Field(default_factory=list, description="Созданные моделью отчёты со ссылками на скачивание.")
     title: str | None = Field(default=None, description="Название диалога, автоматически созданное моделью; null до генерации или без сохранения истории.")
     conversation_id: UUID | None = Field(default=None, description="ID диалога; null, если история не сохраняется.")
     model: str = Field(description="Имя модели, сформировавшей ответ.")
     response: str = Field(description="Конечный ответ модели без текста рассуждений.")
 
 
-class HistoryRequest(BaseModel):
+class HistoryRequest(ChatOwner):
     model_config = ConfigDict(extra="forbid")
 
     conversation_id: UUID

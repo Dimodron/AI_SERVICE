@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, UploadFile
 from fastapi.responses import Response
 from schemas.files import FileResponse
-from services.files import get_file, upload_file
+from services.files import get_file, upload_file, MAX_FILE_BYTES, MAX_FILES, MEDIA_TYPES
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -15,6 +15,11 @@ async def upload(file: UploadFile):
         return await upload_file(file)
     finally:
         await file.close()
+
+
+@router.get("/limits")
+async def limits():
+    return {"max_file_bytes": MAX_FILE_BYTES, "max_files": MAX_FILES, "extensions": list(MEDIA_TYPES)}
 
 
 @router.get("/{file_id}", response_model=FileResponse)

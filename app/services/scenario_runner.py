@@ -1,11 +1,14 @@
 import json
 import re
+from uuid import uuid4
 
 from fastapi import HTTPException
 from psycopg import sql
 from psycopg.errors import DataError, ProgrammingError, QueryCanceled
 from schemas.qwen import ChatRequest
 from schemas.scenario_query import ScenarioQuery
+from schemas.reports import ReportCreate, ReportToolRequest, ReportResponse
+from services.reports import create_report
 from services.QueenModels import QwenStrategy
 
 MAX_TOOL_CALLS = 6
@@ -19,6 +22,15 @@ QUERY_TOOL = {
         "name": "query_scenario",
         "description": "Чтение данных активного сценария с фильтром по user_jurpers. Поддерживает фильтры, SUM/COUNT/AVG/MIN/MAX и группировку. SQL формирует приложение.",
         "parameters": ScenarioQuery.model_json_schema(),
+    },
+}
+
+REPORT_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "create_report",
+        "description": "Создать файл XLSX, CSV или DOCX и получить ссылку. Для отчёта по данным БД передай query_result_id из query_scenario: сервер сам перенесёт строки. Для текстового документа используй text, для своей таблицы — columns и rows.",
+        "parameters": ReportToolRequest.model_json_schema(),
     },
 }
 
@@ -37,6 +49,8 @@ def _table_parts(name: str) -> tuple[str, str]:
 
 async def query_scenario(connection, scenario: dict, query: ScenarioQuery, payload: ChatRequest) -> dict:
     # Ownership predicates are fixed by the application, never by the model.
+    if scenario["visible_jurpers"] and payload.user_jurpers not in scenario["visible_jurpers"]:
+        raise ValueError("Сценарий недоступен этому юрлицу")
     scope_column = "jurpers"
     if not scenario["table_name"]:
         raise ValueError("У сценария не указана таблица")
@@ -120,33 +134,80 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
     return result
 
 
-async def answer_with_scenarios(connection, model: str, payload: ChatRequest, messages: list[dict], scenarios: dict[str, dict]) -> str:
+async def answer_with_scenarios(connection, model: str, payload: ChatRequest, messages: list[dict], scenarios: dict[str, dict]) -> tuple[str, list[ReportResponse]]:
     strategy = QwenStrategy(model, payload)
-    if not scenarios:
-        return await strategy.chat(messages)
     messages = list(messages)
+    # Place tool instructions before the user context, after configured system prompts.
+    index = next((i for i, message in enumerate(messages) if message["role"] != "system"), len(messages))
+    messages.insert(index, {
+        "role": "system",
+        "content": (
+            "Если пользователь просит отчёт или файл, вызови create_report в формате xlsx, csv "
+            "или docx. Для данных из БД сначала вызови query_scenario, затем передай его "
+            "query_result_id в create_report: не переписывай строки вручную. "
+            "Не выдавай неполную выборку за полный отчёт. Для текстового документа передай text. "
+            "Не выдумывай данные и ссылки; используй download_url успешного create_report. "
+            "Если формат не указан, для таблицы выбери xlsx, для текстового документа — docx."
+        ),
+    })
+    tools = [REPORT_TOOL, *([QUERY_TOOL] if scenarios else [])]
+    files: list[ReportResponse] = []
+    query_results = {}
     calls_used = 0
     while True:
-        reply = await strategy.chat_message(messages, [QUERY_TOOL])
+        reply = await strategy.chat_message(messages, tools)
         calls = reply.get("tool_calls", [])
         if not calls:
-            return reply["content"]
+            answer = reply["content"]
+            # Persist clickable links in message history even if the model omits them.
+            for file in files:
+                if file.download_url not in answer:
+                    answer += f"\n\n[Скачать {file.filename}]({file.download_url})"
+            return answer, files
         if calls_used + len(calls) > MAX_TOOL_CALLS:
-            raise HTTPException(422, "Модель превысила лимит запросов сценария; уточните вопрос")
+            raise HTTPException(422, "Модель превысила лимит вызовов инструментов; уточните вопрос")
         messages.append(reply)
         for call in calls:
             function = call["function"]
             calls_used += 1
             try:
-                if function["name"] != "query_scenario":
-                    raise ValueError("Доступен только инструмент query_scenario")
-                query = ScenarioQuery.model_validate(function["arguments"])
-                scenario = scenarios.get(str(query.scenario_id))
-                if scenario is None:
-                    raise ValueError("Сценарий отсутствует или выключен")
-                result = await query_scenario(connection, scenario, query, payload)
+                if function["name"] == "query_scenario":
+                    query = ScenarioQuery.model_validate(function["arguments"])
+                    scenario = scenarios.get(str(query.scenario_id))
+                    if scenario is None:
+                        raise ValueError("Сценарий отсутствует или недоступен")
+                    result = await query_scenario(connection, scenario, query, payload)
+                    result_id = str(uuid4())
+                    query_results[result_id] = result
+                    result = {**result, "query_result_id": result_id}
+                elif function["name"] == "create_report":
+                    report_args = ReportToolRequest.model_validate(function["arguments"])
+                    data = report_args.model_dump(exclude={"query_result_id"})
+                    if report_args.query_result_id is not None:
+                        source = query_results.get(report_args.query_result_id)
+                        if source is None:
+                            raise ValueError("Результат запроса отсутствует: сначала вызови query_scenario")
+                        if source["truncated"]:
+                            raise ValueError("Выборка неполная. Уточни фильтры или используй агрегаты перед созданием отчёта")
+                        if report_args.rows or report_args.columns:
+                            raise ValueError("С query_result_id не передавай rows и columns")
+                        if not source["rows"]:
+                            raise ValueError("Запрос не вернул строк для отчёта")
+                        data["columns"] = list(source["rows"][0])
+                        data["rows"] = [
+                            [value if value is None or isinstance(value, (str, int, float, bool)) else str(value)
+                             for value in row.values()] for row in source["rows"]
+                        ]
+                    report = ReportCreate.model_validate(data)
+                    file = await create_report(connection, report)
+                    files.append(file)
+                    result = file.model_dump(mode="json")
+                else:
+                    raise ValueError("Неизвестный инструмент")
             except ValueError as error:
                 result = {"error": str(error)[:2000]}
+            except HTTPException as error:
+                result = {"error": error.detail}
             except (DataError, ProgrammingError, QueryCanceled):
                 result = {"error": "Не удалось прочитать данные: проверь колонки, типы фильтров и агрегаты; запрос ограничен 5 секундами"}
             messages.append({

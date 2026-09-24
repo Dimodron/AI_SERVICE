@@ -8,7 +8,7 @@ from psycopg.errors import ForeignKeyViolation
 from database.history import connect
 from schemas.scenarios import ScenarioCreate, ScenarioUpdate
 
-_COLUMNS = "id, title, description, table_name, columns_description, scenario, is_active, create_user, edit_user, create_time, edit_time"
+_COLUMNS = "id, title, description, table_name, columns_description, scenario, visible_jurpers, is_active, create_user, edit_user, create_time, edit_time"
 
 
 def _require_scenario(record):
@@ -21,23 +21,24 @@ async def create_scenario(payload: ScenarioCreate):
     try:
         async with await connect() as connection:
             cursor = await connection.execute(
-                f"INSERT INTO scenarios (title, description, table_name, columns_description, scenario, is_active, create_user) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+                f"INSERT INTO scenarios (title, description, table_name, columns_description, scenario, visible_jurpers, is_active, create_user) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
                 (payload.title, payload.description, payload.table_name, Jsonb(payload.columns_description),
-                 payload.scenario, payload.is_active, payload.create_user),
+                 payload.scenario, payload.visible_jurpers, payload.is_active, payload.create_user),
             )
             return await cursor.fetchone()
     except ForeignKeyViolation as error:
         raise HTTPException(422, "Пользователь create_user не найден") from error
 
 
-async def list_scenarios(is_active: bool | None, limit: int, offset: int):
+async def list_scenarios(is_active: bool | None, limit: int, offset: int, user_jurpers: int | None = None):
     async with await connect() as connection:
         cursor = await connection.execute(
             f"SELECT {_COLUMNS} FROM scenarios "
             "WHERE (%s::boolean IS NULL OR is_active = %s) "
+            "AND (%s::bigint IS NULL OR cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
             "ORDER BY create_time, id LIMIT %s OFFSET %s",
-            (is_active, is_active, limit, offset),
+            (is_active, is_active, user_jurpers, user_jurpers, limit, offset),
         )
         return await cursor.fetchall()
 

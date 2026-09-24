@@ -5,6 +5,7 @@ services:
       - "8282:8282"
     environment:
       QWEN_URL: ${QWEN_URL:-http://192.168.68.56:11434}
+      MAX_FILE_BYTES: ${MAX_FILE_BYTES:-5242880}
       PG_POOL_SIZE: ${PG_POOL_SIZE:-10}
       PGHOST: postgres
       PGPORT: "5432"

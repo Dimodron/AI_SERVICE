@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+from os import environ
 from pathlib import Path
 from uuid import UUID, uuid4
 from zipfile import ZipFile
@@ -11,7 +12,9 @@ from openpyxl import load_workbook
 from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
-MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_FILE_BYTES = int(environ.get("MAX_FILE_BYTES", str(5 * 1024 * 1024)))
+if MAX_FILE_BYTES <= 0:
+    raise ValueError("MAX_FILE_BYTES должен быть положительным")
 MAX_TEXT_CHARS = 3000000
 MAX_FILES = 5
 MAX_IMAGE_PIXELS = 20_000_000
@@ -95,7 +98,7 @@ async def upload_file(upload: UploadFile) -> dict:
         raise HTTPException(422, 'Некорректное имя файла')
     content = await upload.read(MAX_FILE_BYTES + 1)
     if len(content) > MAX_FILE_BYTES:
-        raise HTTPException(413, 'Максимальный размер файла — 5 МБ')
+        raise HTTPException(413, f'Максимальный размер файла — {MAX_FILE_BYTES} байт')
     if not content:
         raise HTTPException(422, 'Файл пуст')
     try:

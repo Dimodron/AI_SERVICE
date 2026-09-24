@@ -1,14 +1,16 @@
 import json
 
 
-async def load_chat_context(connection) -> tuple[list[dict], dict[str, dict]]:
+async def load_chat_context(connection, user_jurpers: int) -> tuple[list[dict], dict[str, dict]]:
     cursor = await connection.execute(
         "SELECT prompt FROM system_prompt WHERE is_active ORDER BY order_num, create_time, id"
     )
     messages = [{"role": "system", "content": row["prompt"]} for row in await cursor.fetchall()]
     cursor = await connection.execute(
-        "SELECT id, title, description, table_name, columns_description, scenario "
-        "FROM scenarios WHERE is_active ORDER BY create_time, id"
+        "SELECT id, title, description, table_name, columns_description, scenario, visible_jurpers "
+        "FROM scenarios WHERE is_active "
+        "AND (cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
+        "ORDER BY create_time, id", (user_jurpers,),
     )
     scenarios = {str(row["id"]): row for row in await cursor.fetchall()}
     if scenarios:

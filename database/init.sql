@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS scenarios (
     table_name TEXT,
     columns_description JSONB NOT NULL DEFAULT '{}'::jsonb,
     scenario TEXT NOT NULL,
+    visible_jurpers BIGINT[] NOT NULL DEFAULT '{}',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     create_user UUID REFERENCES users(id),
     edit_user UUID REFERENCES users(id),
