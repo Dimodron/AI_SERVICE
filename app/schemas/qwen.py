@@ -43,7 +43,6 @@ class ChatCreateRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     model: str | None = Field(default=None, min_length=1, description="Модель диалога. По умолчанию первая доступная модель Ollama.")
-    title: str | None = Field(default=None, min_length=1, max_length=255, description="Название диалога.")
 
 
 class ChatCreateResponse(BaseModel):
@@ -75,6 +74,7 @@ class ChatRequest(GenerationSettings):
         return self
 
 class ChatResponse(BaseModel):
+    title: str | None = Field(default=None, description="Название диалога, автоматически созданное моделью; null до генерации или без сохранения истории.")
     conversation_id: UUID | None = Field(default=None, description="ID диалога; null, если история не сохраняется.")
     model: str = Field(description="Имя модели, сформировавшей ответ.")
     response: str = Field(description="Конечный ответ модели без текста рассуждений.")

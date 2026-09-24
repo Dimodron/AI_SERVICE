@@ -9,6 +9,7 @@ from schemas.qwen import (
     HistoryResponse,
 )
 from services.chat_context import load_chat_context
+from services.chat_title import generate_chat_title
 from services.files import file_context
 from services.QueenModels import resolve_model
 from services.scenario_runner import answer_with_scenarios
@@ -18,9 +19,9 @@ async def create_chat(payload: ChatCreateRequest) -> ChatCreateResponse:
     model = await resolve_model(payload.model)
     async with await connect() as connection:
         cursor = await connection.execute(
-            "INSERT INTO conversations (model, title) VALUES (%s, %s) "
+            "INSERT INTO conversations (model) VALUES (%s) "
             "RETURNING id AS conversation_id, model, title, created_at",
-            (model, payload.title),
+            (model,),
         )
         return ChatCreateResponse(**await cursor.fetchone())
 
@@ -41,7 +42,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     async with await connect() as connection:
         await connection.execute("SET LOCAL lock_timeout = '310s'")
         cursor = await connection.execute(
-            "SELECT id, model FROM conversations WHERE id = %s FOR UPDATE",
+            "SELECT id, model, title FROM conversations WHERE id = %s FOR UPDATE",
             (payload.conversation_id,),
         )
         conversation = await cursor.fetchone()
@@ -69,10 +70,20 @@ async def chat(payload: ChatRequest) -> ChatResponse:
                 "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
                 [(conversation_id, "user", payload.message), (conversation_id, "assistant", answer)],
             )
+        title = conversation["title"]
+        if title is None:
+            # Retry an earlier failed title generation using the first exchange.
+            cursor = await connection.execute(
+                "SELECT content FROM messages WHERE conversation_id = %s ORDER BY id LIMIT 2",
+                (conversation_id,),
+            )
+            first_exchange = await cursor.fetchall()
+            title = await generate_chat_title(model, first_exchange[0]["content"], first_exchange[1]["content"])
         await connection.execute(
-            "UPDATE conversations SET last_message_at = now() WHERE id = %s", (conversation_id,),
+            "UPDATE conversations SET last_message_at = now(), title = %s WHERE id = %s",
+            (title, conversation_id),
         )
-    return ChatResponse(conversation_id=conversation_id, model=model, response=answer)
+    return ChatResponse(conversation_id=conversation_id, title=title, model=model, response=answer)
 
 
 async def history(payload: HistoryRequest) -> dict:

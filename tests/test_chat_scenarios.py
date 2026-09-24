@@ -32,6 +32,8 @@ class ChatScenariosTest(unittest.TestCase):
                 ('Debt', 'scenario_test_debts', Jsonb({'amount': 'Debt amount', 'note': 'Note', 'organization': 'Organization'}), 'Sum amount'),
             ).fetchone()[0])
         self.calls = []
+        self.title_calls = []
+        self.fail_title = False
         self.client_context = TestClient(app)
         self.client = self.client_context.__enter__()
         self.real_ollama = QueenModels._client
@@ -54,6 +56,11 @@ class ChatScenariosTest(unittest.TestCase):
         if self.fail_chat:
             return httpx.Response(500, json={'error': 'Test model failure'})
         body = json.loads(request.content)
+        if body['messages'][0]['content'].startswith('Придумай короткое название чата'):
+            self.title_calls.append(body)
+            if self.fail_title:
+                return httpx.Response(500, json={'error': 'Title failure'})
+            return httpx.Response(200, json={'done': True, 'message': {'content': 'Задолженность по организации'}})
         self.calls.append(body)
         messages = body['messages']
         self.assertEqual([m['content'] for m in messages[:2]], ['FIRST', 'SECOND'])
@@ -165,9 +172,9 @@ class ChatScenariosTest(unittest.TestCase):
         self.assertIn('error', json.loads(response.json()['response']))
 
     def test_create_chat_does_not_generate_answer(self):
-        response = self.client.post('/api/chat/create', json={'title': 'Файлы'})
+        response = self.client.post('/api/chat/create', json={})
         self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()['title'], 'Файлы')
+        self.assertIsNone(response.json()['title'])
         self.assertEqual(response.json()['model'], 'test')
         self.assertEqual(self.calls, [])
         history = self.client.post('/api/chat/history', json={'conversation_id': response.json()['conversation_id']})
@@ -220,6 +227,37 @@ class ChatScenariosTest(unittest.TestCase):
         response = self.chat(save_history=True, file_ids=[str(uuid4())])
         self.assertEqual(response.status_code, 404, response.text)
         self.assertEqual(self.calls, [])
+
+    def test_title_is_generated_once_and_returned(self):
+        response = self.chat(save_history=True)
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body['title'], 'Задолженность по организации')
+        self.assertEqual(len(self.title_calls), 1)
+        source = json.loads(self.title_calls[0]['messages'][1]['content'])
+        self.assertEqual(source['question'], 'Какая задолженность?')
+        self.assertEqual(source['answer'], body['response'])
+        second = self.chat(save_history=True, conversation_id=body['conversation_id'])
+        self.assertEqual(second.json()['title'], body['title'])
+        self.assertEqual(len(self.title_calls), 1)
+        with psycopg.connect() as db:
+            title = db.execute('SELECT title FROM conversations WHERE id=%s', (body['conversation_id'],)).fetchone()[0]
+        self.assertEqual(title, body['title'])
+
+    def test_title_failure_keeps_answer_and_retries(self):
+        self.fail_title = True
+        response = self.chat(save_history=True)
+        self.assertEqual(response.status_code, 200, response.text)
+        first = response.json()
+        self.assertIsNone(first['title'])
+        with psycopg.connect() as db:
+            self.assertEqual(db.execute('SELECT count(*) FROM messages').fetchone()[0], 2)
+        self.fail_title = False
+        second = self.chat(save_history=True, conversation_id=first['conversation_id'], message='Другой вопрос')
+        self.assertEqual(second.json()['title'], 'Задолженность по организации')
+        source = json.loads(self.title_calls[-1]['messages'][1]['content'])
+        self.assertEqual(source['question'], 'Какая задолженность?')
+        self.assertEqual(source['answer'], first['response'])
 
     def test_loop_is_bounded(self):
         self.force_calls = True
