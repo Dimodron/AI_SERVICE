@@ -1,13 +1,17 @@
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    jurpers integer NOT NULL,
     model TEXT NOT NULL,
+    title TEXT,
+    LAST_MESSAGE_AT TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS messages (
     id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-    role TEXT NOT NULL CHECK (role IN ('system', 'user', 'assistant')),
+    role TEXT NOT NULL CHECK (role IN ('admin', 'user', 'assistant')),
+    info JSONB DEFAULT {},
     content TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -29,3 +33,6 @@ CREATE TABLE IF NOT EXISTS conversation_files (
     file_id UUID NOT NULL REFERENCES files(id),
     PRIMARY KEY (conversation_id, file_id)
 );
+
+
+docker exec -it postgres psql -U qwen -d qwen
