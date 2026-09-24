@@ -1,15 +1,16 @@
 from fastapi import APIRouter
 from schemas.qwen import (
+    ChatCreateRequest,
+    ChatCreateResponse,
     ChatRequest,
     ChatResponse,
-    GenerateRequest,
-    GenerateResponse,
     HistoryRequest,
     HistoryResponse,
 )
 from services.chat import chat as chat_service
+from services.chat import create_chat as create_chat_service
 from services.chat import history as history_service
-from services.QueenModels import ask_qwen, list_models
+from services.QueenModels import list_models
 
 router = APIRouter(prefix="/api", tags=["Qwen"])
 
@@ -19,10 +20,9 @@ async def models():
     return await list_models()
 
 
-@router.post("/generate", response_model=GenerateResponse)
-async def generate(payload: GenerateRequest):
-    answer = await ask_qwen(payload.prompt, payload.model, payload)
-    return GenerateResponse(response=answer)
+@router.post("/chat/create", response_model=ChatCreateResponse, status_code=201)
+async def create_chat(payload: ChatCreateRequest):
+    return await create_chat_service(payload)
 
 
 @router.post("/chat", response_model=ChatResponse)

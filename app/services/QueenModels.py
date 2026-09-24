@@ -76,13 +76,29 @@ class QwenStrategy:
         return answer
 
     async def chat(self, messages: list[dict]) -> str:
+        message = await self.chat_message(messages)
+        return message["content"]
+
+    async def chat_message(self, messages: list[dict], tools: list[dict] | None = None) -> dict:
         if any(message.get("images") for message in messages):
             await self.ensure_vision()
-        data = await self._request("chat", {"messages": messages})
+        payload = {"messages": messages}
+        if tools:
+            payload["tools"] = tools
+        data = await self._request("chat", payload)
         message = data.get("message")
         if not isinstance(message, dict) or not isinstance(message.get("content"), str):
             raise QwenResponseError("Некорректный ответ Ollama")
-        return message["content"]
+        calls = message.get("tool_calls", [])
+        if not isinstance(calls, list):
+            raise QwenResponseError("Некорректные вызовы инструментов Ollama")
+        for call in calls:
+            if not isinstance(call, dict) or not isinstance(call.get("function"), dict):
+                raise QwenResponseError("Некорректный вызов инструмента Ollama")
+            function = call["function"]
+            if not isinstance(function.get("name"), str) or not isinstance(function.get("arguments"), dict):
+                raise QwenResponseError("Некорректные аргументы инструмента Ollama")
+        return {**message, "role": "assistant"}
 
     async def ensure_vision(self) -> None:
         if _client is None:

@@ -1,13 +1,28 @@
 from database.history import connect
 from fastapi import HTTPException
 from schemas.qwen import (
+    ChatCreateRequest,
+    ChatCreateResponse,
     ChatRequest,
     ChatResponse,
     HistoryRequest,
     HistoryResponse,
 )
+from services.chat_context import load_chat_context
 from services.files import file_context
-from services.QueenModels import QwenStrategy, resolve_model
+from services.QueenModels import resolve_model
+from services.scenario_runner import answer_with_scenarios
+
+
+async def create_chat(payload: ChatCreateRequest) -> ChatCreateResponse:
+    model = await resolve_model(payload.model)
+    async with await connect() as connection:
+        cursor = await connection.execute(
+            "INSERT INTO conversations (model, title) VALUES (%s, %s) "
+            "RETURNING id AS conversation_id, model, title, created_at",
+            (model, payload.title),
+        )
+        return ChatCreateResponse(**await cursor.fetchone())
 
 
 async def chat(payload: ChatRequest) -> ChatResponse:
@@ -15,33 +30,27 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
     if not payload.save_history:
         model = await resolve_model(payload.model)
-        context = []
-        if payload.file_ids:
-            async with await connect() as connection:
-                context = await file_context(connection, payload.file_ids)
-        answer = await QwenStrategy(model, payload).chat([*context, message])
+        async with await connect() as connection:
+            system_messages, scenarios = await load_chat_context(connection)
+            context = await file_context(connection, payload.file_ids)
+            answer = await answer_with_scenarios(
+                connection, model, payload, [*system_messages, *context, message], scenarios,
+            )
         return ChatResponse(model=model, response=answer)
 
     async with await connect() as connection:
         await connection.execute("SET LOCAL lock_timeout = '310s'")
-        if payload.conversation_id:
-            cursor = await connection.execute(
-                "SELECT id, model FROM conversations WHERE id = %s FOR UPDATE",
-                (payload.conversation_id,),
-            )
-            conversation = await cursor.fetchone()
-            if conversation is None:
-                raise HTTPException(404, "Диалог не найден")
-            model = conversation["model"]
-            if payload.model is not None and payload.model != model:
-                raise HTTPException(409, "Модель закреплена за диалогом")
-            model = await resolve_model(model)
-        else:
-            model = await resolve_model(payload.model)
-            cursor = await connection.execute(
-                "INSERT INTO conversations (model) VALUES (%s) RETURNING id, model", (model,)
-            )
-            conversation = await cursor.fetchone()
+        cursor = await connection.execute(
+            "SELECT id, model FROM conversations WHERE id = %s FOR UPDATE",
+            (payload.conversation_id,),
+        )
+        conversation = await cursor.fetchone()
+        if conversation is None:
+            raise HTTPException(404, "Диалог не найден")
+        model = conversation["model"]
+        if payload.model is not None and payload.model != model:
+            raise HTTPException(409, "Модель закреплена за диалогом")
+        model = await resolve_model(model)
 
         conversation_id = conversation["id"]
         cursor = await connection.execute(
@@ -51,12 +60,18 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
         history = list(reversed(await cursor.fetchall()))
         context = await file_context(connection, payload.file_ids, conversation_id)
-        answer = await QwenStrategy(model, payload).chat([*context, *history, message])
+        system_messages, scenarios = await load_chat_context(connection)
+        answer = await answer_with_scenarios(
+            connection, model, payload, [*system_messages, *context, *history, message], scenarios,
+        )
         async with connection.cursor() as cursor:
             await cursor.executemany(
                 "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
                 [(conversation_id, "user", payload.message), (conversation_id, "assistant", answer)],
             )
+        await connection.execute(
+            "UPDATE conversations SET last_message_at = now() WHERE id = %s", (conversation_id,),
+        )
     return ChatResponse(conversation_id=conversation_id, model=model, response=answer)
 
 
