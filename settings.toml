@@ -35,6 +35,6 @@ MAX_RESULT_CHARS = 60000
 DATA_IMPORT_TIMEOUT = 600
 
 # Копия Oracle view с профилями (одна строка на login). Пустая строка отключает.
-USER_CONTEXT_TABLE = "APXWS.ZV_GPT_USERINFO"
+USER_CONTEXT_TABLE = "oracle_data.zv_gpt_userinfo"
 # Только для подтверждённого администратора: не применять промпты из system_prompt.
 ADMIN_IGNORE_SYSTEM_PROMPTS = true
