@@ -252,3 +252,48 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             self.assertIsNone(data['selected_jurpers_name'])
             self.assertIsNone(data['selected_organization_name'])
             await conn.execute('SELECT 1')
+
+    async def test_switch_model_keeps_history_files_and_uses_new_model(self):
+        import httpx
+        from fastapi import FastAPI
+        from routers.router import router
+        await attach_files(self.cid, AttachFilesRequest(**self.owner,file_ids=[self.fid]))
+        app = FastAPI()
+        app.include_router(router)
+        with patch.dict(os.environ, {'CHAT_API_TOKEN':'test'}), patch('services.chat.resolve_model', AsyncMock(return_value='new-model')):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+                response = await client.patch(f'/api/chat/{self.cid}/model', json={**self.owner,'model':'new-model'},headers={'X-Chat-Token':'test'})
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertEqual(response.json()['model'],'new-model')
+        data = await history(HistoryRequest(**self.owner,conversation_id=self.cid))
+        self.assertEqual(data.model,'new-model')
+        self.assertEqual(len(data.history),1)
+        self.assertEqual(data.files[0].file_id,self.fid)
+        answer = AsyncMock(return_value=('ok',[]))
+        with patch('services.chat.resolve_model',AsyncMock(side_effect=lambda model:model)), patch('services.chat.answer_with_scenarios',answer):
+            await chat(ChatRequest(**self.owner,conversation_id=self.cid,save_history=True,message='Продолжи'))
+        self.assertEqual(answer.call_args.args[1],'new-model')
+        self.assertIn('DEBT=42',answer.call_args.args[3][-1]['content'])
+
+    async def test_switch_rejects_wrong_owner_missing_model_and_incompatible_images(self):
+        from schemas.qwen import ChatModelRequest
+        from services.chat import change_chat_model
+        request = ChatModelRequest(**self.owner,model='new-model')
+        with self.assertRaises(HTTPException) as error:
+            await change_chat_model(self.cid,request.model_copy(update={'user_login':'other'}))
+        self.assertEqual(error.exception.status_code,404)
+        with patch('services.chat.resolve_model',AsyncMock(side_effect=HTTPException(422,'missing'))):
+            with self.assertRaises(HTTPException):
+                await change_chat_model(self.cid,request)
+        async with await connect() as conn:
+            await conn.execute("UPDATE files SET media_type='image/png' WHERE id=%s",(self.fid,))
+            await conn.execute('INSERT INTO conversation_files VALUES (%s,%s)',(self.cid,self.fid))
+        with patch('services.chat.resolve_model',AsyncMock(return_value='new-model')), patch('services.chat.QwenStrategy.ensure_vision',AsyncMock(side_effect=HTTPException(422,'no vision'))):
+            with self.assertRaises(HTTPException):
+                await change_chat_model(self.cid,request)
+        data = await history(HistoryRequest(**self.owner,conversation_id=self.cid))
+        self.assertEqual(data.model,'test')
+        with patch('services.chat.resolve_model',AsyncMock(return_value='vision-model')), patch('services.chat.QwenStrategy.ensure_vision',AsyncMock()) as vision:
+            result = await change_chat_model(self.cid,request.model_copy(update={'model':'vision-model'}))
+            self.assertEqual(result.model,'vision-model')
+            vision.assert_awaited_once()

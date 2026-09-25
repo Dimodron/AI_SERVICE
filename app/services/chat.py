@@ -82,7 +82,7 @@ async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
             raise HTTPException(404, "Диалог не найден")
         model = conversation["model"]
         if payload.model is not None and payload.model != model:
-            raise HTTPException(409, "Модель закреплена за диалогом")
+            raise HTTPException(409, "Модель диалога отличается от запроса; переключите её через PATCH /api/chat/{id}/model")
         model = await resolve_model(model)
 
         conversation_id = conversation["id"]
@@ -120,12 +120,13 @@ async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
 async def history(payload: HistoryRequest) -> HistoryResponse:
     async with await connect() as connection:
         cursor = await connection.execute(
-            "SELECT c.id FROM conversations c JOIN users u ON u.id = c.user_uuid "
+            "SELECT c.id, c.model FROM conversations c JOIN users u ON u.id = c.user_uuid "
             "WHERE c.id = %s AND u.login = %s AND u.jurpers = %s",
             (payload.conversation_id, payload.user_login, payload.user_jurpers),
         )
 
-        if await cursor.fetchone() is None:
+        conversation = await cursor.fetchone()
+        if conversation is None:
             raise HTTPException(404, "Диалог не найден")
 
         cursor = await connection.execute(
@@ -151,7 +152,7 @@ async def history(payload: HistoryRequest) -> HistoryResponse:
                 (row.pop("id"),),
             )
             row["files"] = await files_cursor.fetchall()
-        return HistoryResponse(history=rows, files=await conversation_attachments(connection, payload.conversation_id))
+        return HistoryResponse(model=conversation["model"], history=rows, files=await conversation_attachments(connection, payload.conversation_id))
 
 async def list_chats(user_login: str, user_jurpers: int, limit: int, offset: int):
     async with await connect() as connection:
@@ -211,3 +212,26 @@ async def attach_files(conversation_id, payload):
             await save_message(connection, conversation_id, "user", "", new_ids)
             await connection.execute("UPDATE conversations SET last_message_at=now() WHERE id=%s", (conversation_id,))
         return {"conversation_id": conversation_id, "files": await conversation_attachments(connection, conversation_id)}
+
+
+async def change_chat_model(conversation_id, payload):
+    async with await connect() as connection:
+        await connection.execute("SET LOCAL lock_timeout = '10s'")
+        cursor = await connection.execute(
+            "SELECT c.id FROM conversations c JOIN users u ON u.id=c.user_uuid "
+            "WHERE c.id=%s AND u.login=%s AND u.jurpers=%s FOR UPDATE OF c",
+            (conversation_id, payload.user_login, payload.user_jurpers),)
+        if await cursor.fetchone() is None:
+            raise HTTPException(404, "Диалог не найден")
+        model = await resolve_model(payload.model)
+        cursor = await connection.execute(
+            "SELECT 1 FROM conversation_files cf JOIN files f ON f.id=cf.file_id "
+            "WHERE cf.conversation_id=%s AND f.media_type IN ('image/png','image/jpeg') LIMIT 1",
+            (conversation_id,),)
+        if await cursor.fetchone() is not None:
+            await QwenStrategy(model).ensure_vision()
+        cursor = await connection.execute(
+            "UPDATE conversations SET model=%s WHERE id=%s "
+            "RETURNING id AS conversation_id, model, title, created_at, last_message_at",
+            (model, conversation_id),)
+        return ChatCreateResponse(**await cursor.fetchone())

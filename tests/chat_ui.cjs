@@ -16,7 +16,7 @@ async function until(check) {
 async function fixture() {
     const dom = new JSDOM(`<main id="chat_body"><div class="head-actions"></div><div class="chathead"></div><div id="chatStatus"></div><div id="chatTitle"></div><div id="chatMessages"></div><div id="chatList"></div><input id="chatSearch"><button id="newChatBtn"><span class="new-chat-plus"></span></button><div class="composer"><div id="selectedFiles"></div><textarea id="prompt"></textarea><button id="attachBtn"></button><button id="sendBtn"></button></div><input type="file" id="P237_GPT_FILES"><div class="hint"></div></main>`, {runScripts:'outside-only', url:'http://example.test'});
     const win = dom.window, $ = jquery(win);
-    let active = '', fail = false, stored = false;
+    let active = '', fail = false, stored = false, model = 'test';
     const calls = [];
     win.$v = () => active;
     win.$s = (_name, value) => {active = value;};
@@ -25,18 +25,23 @@ async function fixture() {
         process: (name, data, options) => {
             calls.push({name, data});
             setTimeout(() => {
-                if (name === 'GPTConfig') return options.success({max_files:5,max_file_bytes:5242880,extensions:['.txt'],models:['test']});
+                if (name === 'GPTConfig') return options.success({max_files:5,max_file_bytes:5242880,extensions:['.txt'],models:['test','second']});
                 if (name === 'GPTListChats') return options.success([{conversation_id:cid,model:'test',title:'Chat'}]);
                 if (name === 'GPTCreateChat') return options.success({conversation_id:cid,model:'test'});
                 if (name === 'GPTFileChunk' || name === 'GPTFileCancel') return options.success({});
                 if (name === 'GPTFileFinish') return options.success(file);
+                if (name === 'GPTSetModel') {
+                    if (fail) return options.success({status:'error',message:'no vision'});
+                    model = data.x02;
+                    return options.success({conversation_id:cid,model,title:'Chat'});
+                }
                 if (name === 'GPTChat') {
                     if (fail) return options.success({status:'error',message:'offline'});
                     stored = true;
-                    return options.success({response:'42',title:'Debt',model:'test',files:[]});
+                    return options.success({response:'42',title:'Debt',model,files:[]});
                 }
                 if (name === 'GPTAttachFiles') { stored = true; return options.success({files:[file]}); }
-                if (name === 'GPTLoadChat') return options.success({history:stored?[{role:'user',content:'',files:[file]}]:[],files:stored?[file]:[]});
+                if (name === 'GPTLoadChat') return options.success({model,history:stored?[{role:'user',content:'',files:[file]}]:[],files:stored?[file]:[]});
                 throw new Error('Unexpected call ' + name);
             }, 0);
         }
@@ -108,5 +113,24 @@ async function fixture() {
     assert.equal(retry.calls.filter(c=>c.name==='GPTFileFinish').length, 1, 'retry must reuse uploaded file');
     assert.equal(retry.$('#prompt').val(), '');
     retry.dom.window.close();
-    console.log('UI workflows passed: selection, paste, drop, attachment-only, failure/retry, history, draft and SVG.');
+    const switching = await fixture();
+    await switching.pick('select');
+    switching.$('#prompt').val('Черновик');
+    assert.equal(switching.$('#gptModel').prop('disabled'), false);
+    switching.$('#gptModel').val('second').trigger('change');
+    assert.equal(switching.$('#sendBtn').prop('disabled'), true);
+    await until(() => !switching.$('#sendBtn').prop('disabled'));
+    assert.equal(switching.$('#gptModel').val(), 'second');
+    assert.equal(switching.$('#chatList .chat-item').attr('data-model'), 'second');
+    assert.equal(switching.$('#prompt').val(), 'Черновик');
+    assert.equal(switching.$('#selectedFiles .selected-file').length, 1);
+    switching.setFailure(true);
+    switching.$('#gptModel').val('test').trigger('change');
+    await until(() => !switching.$('#sendBtn').prop('disabled'));
+    assert.equal(switching.$('#gptModel').val(), 'second', 'failure must restore previous selection');
+    switching.$('#chatList .chat-item').trigger('click');
+    await until(() => !switching.$('#sendBtn').prop('disabled'));
+    assert.equal(switching.$('#gptModel').val(), 'second', 'reopening must use saved model');
+    switching.dom.window.close();
+    console.log('UI workflows passed: selection, paste, drop, attachment-only, failure/retry, history, draft, SVG and model switching.');
 })().catch(error=>{ console.error(error); process.exitCode=1; });

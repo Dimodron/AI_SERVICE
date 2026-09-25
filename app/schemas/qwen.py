@@ -60,6 +60,11 @@ class ChatCreateRequest(ChatOwner):
     model: str | None = Field(default=None, min_length=1, description="Модель диалога. По умолчанию первая доступная модель Ollama.")
 
 
+class ChatModelRequest(ChatOwner):
+    model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
+    model: str = Field(min_length=1)
+
+
 class ChatCreateResponse(BaseModel):
     conversation_id: UUID
     model: str
@@ -74,8 +79,8 @@ class ChatRequest(GenerationSettings):
     message: str = Field(min_length=1, max_length=8000, description="Сообщение пользователя или вопрос по прикреплённым файлам.", examples=["Опиши что на картинке"])
     file_ids: list[UUID] = Field(default_factory=list, max_length=settings.MAX_FILES, description=f"До {settings.MAX_FILES} идентификаторов файлов, полученных через POST /api/files. Для изображений нужна модель с поддержкой vision. Чтение файлов использует БД даже при save_history=false.")
     save_history: bool = Field(default=False, description="Сохранять сообщения и привязки файлов в БД. При true обязателен conversation_id, полученный через POST /api/chat/create.")
-    conversation_id: UUID | None = Field(default=None, description="ID диалога, созданного через POST /api/chat/create. Требует save_history=true; используются его история, файлы и закреплённая модель.")
-    model: str | None = Field(default=None, min_length=1, description="Имя модели из GET /api/models. Для нового запроса по умолчанию берётся первая модель Ollama; для существующего диалога — сохранённая. Менять модель диалога нельзя.", examples=["qwen3.5:4b"])
+    conversation_id: UUID | None = Field(default=None, description="ID диалога, созданного через POST /api/chat/create. Требует save_history=true; используются его история, файлы и текущая модель.")
+    model: str | None = Field(default=None, min_length=1, description="Имя модели из GET /api/models. Для нового запроса по умолчанию берётся первая модель Ollama; для существующего диалога — сохранённая. Для переключения модели используйте PATCH /api/chat/{conversation_id}/model.", examples=["qwen3.5:4b"])
     user_login: str = Field(min_length=1, description="Логин пользователя.", examples=["ivan"])
     user_jurpers: int = Field(strict=True, ge=-(2**63), le=2**63 - 1, description="Идентификатор jurpers пользователя (BIGINT).", examples=[123])
     user_organization: int | None = Field(default=None, strict=True, ge=-(2**63), le=2**63 - 1, description="Необязательный фильтр organization для данных сценариев. Применяется вместе с user_jurpers.", examples=[42])
@@ -123,5 +128,6 @@ class HistoryMessage(BaseModel):
 
 
 class HistoryResponse(BaseModel):
+    model: str | None = None
     history: list[HistoryMessage]
     files: list[FileResponse] = Field(default_factory=list)
