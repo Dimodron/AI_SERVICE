@@ -156,6 +156,10 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
             "Если формат не указан, для таблицы выбери xlsx, для текстового документа — docx."
         ),
     })
+    # Some model templates only retain one system turn. Preserve all instructions.
+    if index:
+        combined = "\n\n".join(item["content"] for item in messages[:index + 1])
+        messages = [{"role": "system", "content": combined}, *messages[index + 1:]]
     query_tool = QUERY_TOOL
     if is_admin:
         query_tool = {**QUERY_TOOL, "function": {**QUERY_TOOL["function"],

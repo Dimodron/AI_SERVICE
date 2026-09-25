@@ -47,8 +47,8 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', answer):
             await chat(ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Сколько?'))
         messages = answer.call_args.args[3]
-        self.assertIn('DEBT=42', messages[-2]['content'])
-        self.assertEqual(messages[-1]['content'], 'Сколько?')
+        self.assertIn('DEBT=42', messages[-1]['content'])
+        self.assertTrue(messages[-1]['content'].endswith('Сколько?'))
 
     async def test_question_and_file_rollback_retry_and_history(self):
         request = ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Проверь', file_ids=[self.fid])
@@ -145,3 +145,54 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         data = await history(HistoryRequest(**self.owner, conversation_id=self.cid))
         self.assertFalse(data.files)
         self.assertFalse(data.history)
+
+    async def test_outbound_ollama_has_file_and_question_in_one_turn(self):
+        import httpx
+        from services import QueenModels
+        captured = []
+        async def handler(request):
+            captured.append(json.loads(request.content))
+            return httpx.Response(200, json={"done":True,"message":{"role":"assistant","content":"42"}})
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler),base_url='http://ollama.test') as client:
+            with patch.object(QueenModels, '_client', client), patch('services.chat.resolve_model', AsyncMock(return_value='test')):
+                await chat(ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Проверь файл', file_ids=[self.fid]))
+                await chat(ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Повтори сумму'))
+        for body in captured:
+            messages = body['messages']
+            self.assertEqual(sum(item['role']=='system' for item in messages),1)
+            self.assertEqual(messages[-1]['role'],'user')
+            self.assertIn('DEBT=42',messages[-1]['content'])
+            self.assertIn('debt.txt',messages[-1]['content'])
+        self.assertTrue(captured[-1]['messages'][-1]['content'].endswith('Повтори сумму'))
+
+    async def test_excel_extraction_reaches_last_user_turn(self):
+        from io import BytesIO
+        from fastapi import UploadFile
+        from openpyxl import Workbook
+        from services.files import upload_file
+        book = Workbook()
+        book.active.append(['Организация', 'Сумма'])
+        book.active.append(['Учреждение 1', 12500])
+        stream = BytesIO()
+        book.save(stream)
+        stream.seek(0)
+        upload = UploadFile(filename='Сведения.xlsx', file=stream)
+        try:
+            file = await upload_file(upload)
+        finally:
+            await upload.close()
+        answer = AsyncMock(return_value=('12500', []))
+        with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', answer):
+            await chat(ChatRequest(**self.owner, message='Анализ',file_ids=[file['file_id']]))
+        content = answer.call_args.args[3][-1]['content']
+        self.assertIn('Учреждение 1', content)
+        self.assertIn('12500', content)
+        self.assertIn('Сведения.xlsx', content)
+        self.assertTrue(content.endswith('Анализ'))
+
+    async def test_images_stay_on_question_message(self):
+        from services.chat import model_messages
+        result = model_messages([{'role':'system','content':'rules'}], [],
+            [{'role':'user','content':'image.png','images':['base64data']}], 'Что на фото?')
+        self.assertEqual(result[-1]['images'], ['base64data'])
+        self.assertIn('Что на фото?', result[-1]['content'])

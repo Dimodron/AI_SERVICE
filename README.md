@@ -390,3 +390,15 @@ UPDATE users SET is_admin = TRUE WHERE login = 'admin_login';
 На существующей БД примените `database/init.sql` через psql с `ON_ERROR_STOP=1` перед
 обновлением API: добавятся `is_admin` и `message_files`, сброс данных не требуется.
 Порядок обновления Oracle описан в `oracle_serv/README.md`.
+
+
+## Сеть внешнего контейнера Ollama
+
+API подключён к внешней сети `queen-ai` и к своей сети `default` для PostgreSQL.
+Перед первым запуском создайте сеть: `docker network create queen-ai`
+(если она уже существует, повторять не нужно). Подключите внешний контейнер:
+`docker network connect --alias ollama queen-ai ollama`. При `QWEN_URL=http://ollama:11434`
+оба контейнера должны находиться в этой сети. API подключается автоматически через
+compose.yaml после пересоздания. Для сохранения подключения Ollama при её пересоздании
+добавьте внешнюю сеть queen-ai также в Compose/настройки запуска самой Ollama.
+Документация: https://docs.docker.com/compose/how-tos/networking/

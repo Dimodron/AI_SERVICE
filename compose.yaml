@@ -1,6 +1,9 @@
 services:
   api:
     build: .
+    networks:
+      - default
+      - queen-ai
     ports:
       - "8282:8282"
     volumes:
@@ -50,3 +53,8 @@ services:
 
 volumes:
   postgres_data:
+
+networks:
+  queen-ai:
+    external: true
+    name: queen-ai

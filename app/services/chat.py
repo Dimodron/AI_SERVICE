@@ -42,9 +42,22 @@ async def create_chat(payload: ChatCreateRequest) -> ChatCreateResponse:
         return ChatCreateResponse(**await cursor.fetchone())
 
 
-async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
-    message = {"role": "user", "content": payload.message}
+def model_messages(system_messages, history, context, question):
+    """Keep attachment data and question in the same user turn for model templates."""
+    instructions = [item["content"] for item in system_messages]
+    instructions.extend(item["content"] for item in context if item["role"] == "system")
+    attachments = [item for item in context if item["role"] == "user"]
+    current = {"role": "user", "content": question}
+    if attachments:
+        current["content"] = "\n\n".join(item["content"] for item in attachments) + "\n\nВопрос пользователя:\n" + question
+        images = [image for item in attachments for image in item.get("images", [])]
+        if images:
+            current["images"] = images
+    leading = [{"role": "system", "content": "\n\n".join(instructions)}] if instructions else []
+    return [*leading, *history, current]
 
+
+async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
     if not payload.save_history:
         model = await resolve_model(payload.model)
         async with await connect() as connection:
@@ -53,7 +66,7 @@ async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
             system_messages.append(profile)
             context = await file_context(connection, payload.file_ids)
             answer, files = await answer_with_scenarios(
-                connection, model, payload, [*system_messages, *context, message], scenarios, is_admin=is_admin,
+                connection, model, payload, model_messages(system_messages, [], context, payload.message), scenarios, is_admin=is_admin,
             )
         return ChatResponse(model=model, response=answer, files=files)
 
@@ -84,7 +97,7 @@ async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
         system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers, is_admin=is_admin)
         system_messages.append(profile)
         answer, files = await answer_with_scenarios(
-            connection, model, payload, [*system_messages, *history, *context, message], scenarios, is_admin=is_admin,
+            connection, model, payload, model_messages(system_messages, history, context, payload.message), scenarios, is_admin=is_admin,
         )
         await save_message(connection, conversation_id, "user", payload.message, payload.file_ids)
         await save_message(connection, conversation_id, "assistant", answer, [file.file_id for file in files])
