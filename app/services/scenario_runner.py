@@ -70,7 +70,7 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
         "SELECT a.attname FROM pg_catalog.pg_attribute a "
         "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
         "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE n.nspname = %s AND c.relname = %s AND c.relkind IN ('r', 'p') "
+        "WHERE n.nspname = %s AND c.relname = %s AND c.relkind IN ('r', 'p', 'v', 'm', 'f') "
         "AND a.attnum > 0 AND NOT a.attisdropped", (schema, table),
     )
     actual = {row["attname"] for row in await cursor.fetchall()}
