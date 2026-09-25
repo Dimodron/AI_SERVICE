@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from os import environ
+from config import settings
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
@@ -12,10 +12,10 @@ async def database_lifespan():
     global _pool
     pool = AsyncConnectionPool(
         min_size=0,
-        max_size=int(environ.get("PG_POOL_SIZE", "10")),
-        max_waiting=50,
-        timeout=10,
-        kwargs={"connect_timeout": 10, "row_factory": dict_row},
+        max_size=settings.PG_POOL_SIZE,
+        max_waiting=settings.PG_POOL_MAX_WAITING,
+        timeout=settings.PG_POOL_TIMEOUT,
+        kwargs={"connect_timeout": settings.PG_CONNECT_TIMEOUT, "row_factory": dict_row},
         check=AsyncConnectionPool.check_connection,
         open=False,
     )

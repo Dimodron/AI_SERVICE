@@ -1,6 +1,5 @@
-from fastapi import APIRouter
-
 from database.history import connect
+from fastapi import APIRouter
 from schemas.reports import ReportCreate, ReportResponse
 from services.reports import create_report
 

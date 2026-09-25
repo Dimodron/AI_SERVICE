@@ -1,11 +1,15 @@
 CREATE TABLE IF NOT EXISTS users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT,
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     login TEXT,
     jurpers BIGINT,
     organization BIGINT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Also applies to an existing installation without resetting data.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -40,6 +44,12 @@ CREATE TABLE IF NOT EXISTS conversation_files (
     conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     file_id UUID NOT NULL REFERENCES files(id),
     PRIMARY KEY (conversation_id, file_id)
+);
+
+CREATE TABLE IF NOT EXISTS message_files (
+    message_id BIGINT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    file_id UUID NOT NULL REFERENCES files(id),
+    PRIMARY KEY (message_id, file_id)
 );
 
 CREATE TABLE IF NOT EXISTS scenarios (

@@ -1,3 +1,5 @@
+from config import settings
+
 import json
 import re
 from uuid import uuid4
@@ -6,15 +8,15 @@ from fastapi import HTTPException
 from psycopg import sql
 from psycopg.errors import DataError, ProgrammingError, QueryCanceled
 from schemas.qwen import ChatRequest
+from schemas.reports import ReportCreate, ReportResponse, ReportToolRequest
 from schemas.scenario_query import ScenarioQuery
-from schemas.reports import ReportCreate, ReportToolRequest, ReportResponse
-from services.reports import create_report
 from services.QueenModels import QwenStrategy
+from services.reports import create_report
 
-MAX_TOOL_CALLS = 6
-MAX_RESULT_CHARS = 60000
+MAX_TOOL_CALLS = settings.MAX_TOOL_CALLS
+MAX_RESULT_CHARS = settings.MAX_RESULT_CHARS
 _IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-_INTERNAL_TABLES = {"users", "conversations", "messages", "files", "conversation_files", "scenarios", "system_prompt"}
+_INTERNAL_TABLES = {"users", "conversations", "messages", "files", "conversation_files", "message_files", "scenarios", "system_prompt"}
 _OPERATORS = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "like": "LIKE"}
 QUERY_TOOL = {
     "type": "function",
@@ -47,9 +49,9 @@ def _table_parts(name: str) -> tuple[str, str]:
     return schema, table
 
 
-async def query_scenario(connection, scenario: dict, query: ScenarioQuery, payload: ChatRequest) -> dict:
+async def query_scenario(connection, scenario: dict, query: ScenarioQuery, payload: ChatRequest, *, is_admin: bool = False) -> dict:
     # Ownership predicates are fixed by the application, never by the model.
-    if scenario["visible_jurpers"] and payload.user_jurpers not in scenario["visible_jurpers"]:
+    if not is_admin and scenario["visible_jurpers"] and payload.user_jurpers not in scenario["visible_jurpers"]:
         raise ValueError("Сценарий недоступен этому юрлицу")
     scope_column = "jurpers"
     if not scenario["table_name"]:
@@ -72,9 +74,9 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
         "AND a.attnum > 0 AND NOT a.attisdropped", (schema, table),
     )
     actual = {row["attname"] for row in await cursor.fetchall()}
-    if not allowed <= actual or scope_column not in actual:
+    if not allowed <= actual or (not is_admin and scope_column not in actual):
         raise ValueError("Таблица, описанные колонки или колонка принадлежности отсутствуют в БД")
-    if payload.user_organization is not None and "organization" not in actual:
+    if not is_admin and payload.user_organization is not None and "organization" not in actual:
         raise ValueError("В таблице нет organization: нельзя выполнить запрошенную узкую выборку")
     expressions = []
     if query.aggregates:
@@ -96,9 +98,9 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
         if query.group_by:
             raise ValueError("group_by требует aggregates")
         expressions.extend(column(name) for name in (query.columns or sorted(allowed)))
-    predicates = [sql.SQL("{} = %s").format(sql.Identifier(scope_column))]
-    params = [payload.user_jurpers]
-    if payload.user_organization is not None:
+    predicates = [sql.SQL("TRUE")] if is_admin else [sql.SQL("{} = %s").format(sql.Identifier(scope_column))]
+    params = [] if is_admin else [payload.user_jurpers]
+    if not is_admin and payload.user_organization is not None:
         predicates.append(sql.SQL('"organization" = %s'))
         params.append(payload.user_organization)
     for condition in query.filters:
@@ -131,10 +133,14 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
     result = {"rows": rows[:query.limit], "truncated": len(rows) > query.limit}
     if len(json.dumps(result, ensure_ascii=False, default=str)) > MAX_RESULT_CHARS:
         raise ValueError("Результат слишком большой: уменьши limit, выбери меньше колонок или используй агрегаты")
+    result["source"] = {"table": scenario["table_name"], "filters": [item.model_dump() for item in query.filters],
+                        "jurpers": None if is_admin else payload.user_jurpers,
+                        "organization": None if is_admin else payload.user_organization,
+                        "all_jurpers": is_admin}
     return result
 
 
-async def answer_with_scenarios(connection, model: str, payload: ChatRequest, messages: list[dict], scenarios: dict[str, dict]) -> tuple[str, list[ReportResponse]]:
+async def answer_with_scenarios(connection, model: str, payload: ChatRequest, messages: list[dict], scenarios: dict[str, dict], *, is_admin: bool = False) -> tuple[str, list[ReportResponse]]:
     strategy = QwenStrategy(model, payload)
     messages = list(messages)
     # Place tool instructions before the user context, after configured system prompts.
@@ -150,7 +156,11 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
             "Если формат не указан, для таблицы выбери xlsx, для текстового документа — docx."
         ),
     })
-    tools = [REPORT_TOOL, *([QUERY_TOOL] if scenarios else [])]
+    query_tool = QUERY_TOOL
+    if is_admin:
+        query_tool = {**QUERY_TOOL, "function": {**QUERY_TOOL["function"],
+                      "description": "Чтение данных активного сценария. Администратору доступны все юрлица; для конкретного юрлица или организации укажи filters. Поддерживает агрегаты и группировку."}}
+    tools = [REPORT_TOOL, *([query_tool] if scenarios else [])]
     files: list[ReportResponse] = []
     query_results = {}
     calls_used = 0
@@ -176,7 +186,7 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
                     scenario = scenarios.get(str(query.scenario_id))
                     if scenario is None:
                         raise ValueError("Сценарий отсутствует или недоступен")
-                    result = await query_scenario(connection, scenario, query, payload)
+                    result = await query_scenario(connection, scenario, query, payload, is_admin=is_admin)
                     result_id = str(uuid4())
                     query_results[result_id] = result
                     result = {**result, "query_result_id": result_id}

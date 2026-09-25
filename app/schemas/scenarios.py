@@ -1,6 +1,6 @@
 from datetime import datetime
-from uuid import UUID
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -10,7 +10,6 @@ from pydantic import (
     StrictBool,
     model_validator,
 )
-
 
 Jurpers = Annotated[int, Field(strict=True, ge=-(2**63), le=2**63 - 1)]
 

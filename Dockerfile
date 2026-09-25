@@ -8,6 +8,7 @@ COPY Pipfile Pipfile.lock ./
 RUN pip install --no-cache-dir pipenv \
     && pipenv install --system --deploy
 
+COPY settings.toml ./settings.toml
 COPY app/ ./app/
 WORKDIR /srv/app
 

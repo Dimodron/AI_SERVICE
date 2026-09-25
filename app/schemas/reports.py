@@ -1,7 +1,14 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictFloat, StrictInt, model_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    model_validator,
+)
 from schemas.files import FileResponse
 
 Cell = Annotated[str, Field(max_length=10000)] | StrictBool | StrictInt | StrictFloat | None

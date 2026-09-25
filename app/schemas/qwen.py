@@ -1,9 +1,18 @@
+from config import settings
 from datetime import datetime
-from uuid import UUID
-from schemas.reports import ReportResponse
 from typing import Annotated, Literal
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictBool,
+    model_validator,
+)
+from schemas.reports import ReportResponse
+from schemas.files import FileResponse
 
 
 class ModelOptions(BaseModel):
@@ -63,7 +72,7 @@ class ChatRequest(GenerationSettings):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     message: str = Field(min_length=1, max_length=8000, description="Сообщение пользователя или вопрос по прикреплённым файлам.", examples=["Опиши что на картинке"])
-    file_ids: list[UUID] = Field(default_factory=list, max_length=5, description="До 5 идентификаторов файлов, полученных через POST /api/files. Для изображений нужна модель с поддержкой vision. Чтение файлов использует БД даже при save_history=false.")
+    file_ids: list[UUID] = Field(default_factory=list, max_length=settings.MAX_FILES, description=f"До {settings.MAX_FILES} идентификаторов файлов, полученных через POST /api/files. Для изображений нужна модель с поддержкой vision. Чтение файлов использует БД даже при save_history=false.")
     save_history: bool = Field(default=False, description="Сохранять сообщения и привязки файлов в БД. При true обязателен conversation_id, полученный через POST /api/chat/create.")
     conversation_id: UUID | None = Field(default=None, description="ID диалога, созданного через POST /api/chat/create. Требует save_history=true; используются его история, файлы и закреплённая модель.")
     model: str | None = Field(default=None, min_length=1, description="Имя модели из GET /api/models. Для нового запроса по умолчанию берётся первая модель Ollama; для существующего диалога — сохранённая. Менять модель диалога нельзя.", examples=["qwen3.5:4b"])
@@ -79,6 +88,16 @@ class ChatRequest(GenerationSettings):
         if self.conversation_id and not self.save_history:
             raise ValueError("conversation_id требует save_history=true")
         return self
+
+class AttachFilesRequest(ChatOwner):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    file_ids: list[UUID] = Field(min_length=1, max_length=settings.MAX_FILES)
+
+
+class AttachFilesResponse(BaseModel):
+    conversation_id: UUID
+    files: list[FileResponse]
+
 
 class ChatResponse(BaseModel):
     files: list[ReportResponse] = Field(default_factory=list, description="Созданные моделью отчёты со ссылками на скачивание.")
@@ -96,9 +115,11 @@ class HistoryRequest(ChatOwner):
     message_last: int = Field(default=0, ge=0)
 
 class HistoryMessage(BaseModel):
+    files: list[FileResponse] = Field(default_factory=list)
     role: Literal["user", "assistant", "system"]
     content: str
 
 
 class HistoryResponse(BaseModel):
     history: list[HistoryMessage]
+    files: list[FileResponse] = Field(default_factory=list)

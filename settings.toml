@@ -1,0 +1,40 @@
+# Общие настройки API. После изменения: docker compose restart api
+# Размеры указаны в байтах, таймауты — в секундах.
+
+# Вложения: 5 МиБ на файл, до 5 файлов суммарно на диалог.
+MAX_FILE_BYTES = 5242880
+MAX_FILES = 5
+MAX_TEXT_CHARS = 3000000
+MAX_IMAGE_PIXELS = 20000000
+
+# Ограничения чтения Excel (строки и колонки — на один лист).
+MAX_EXCEL_UNPACKED_BYTES = 20971520
+MAX_EXCEL_ROWS = 1000
+MAX_EXCEL_COLUMNS = 100
+
+# Нейросеть и HTTP-клиент.
+QWEN_URL = "http://192.168.68.56:11434"
+QWEN_CONNECT_TIMEOUT = 10
+QWEN_READ_TIMEOUT = 300
+QWEN_WRITE_TIMEOUT = 30
+QWEN_POOL_TIMEOUT = 10
+QWEN_METADATA_TIMEOUT = 10
+QWEN_MAX_CONNECTIONS = 20
+QWEN_KEEPALIVE_CONNECTIONS = 10
+CHAT_TITLE_TIMEOUT = 15
+
+# Пул PostgreSQL.
+PG_POOL_SIZE = 10
+PG_POOL_MAX_WAITING = 50
+PG_POOL_TIMEOUT = 10
+PG_CONNECT_TIMEOUT = 10
+
+# Сценарии и импорт бизнес-данных.
+MAX_TOOL_CALLS = 6
+MAX_RESULT_CHARS = 60000
+DATA_IMPORT_TIMEOUT = 600
+
+# Копия Oracle view с профилями (одна строка на login). Пустая строка отключает.
+USER_CONTEXT_TABLE = "oracle_data.gpt_user_context"
+# Только для подтверждённого администратора: не применять промпты из system_prompt.
+ADMIN_IGNORE_SYSTEM_PROMPTS = true

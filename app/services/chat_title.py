@@ -1,10 +1,11 @@
+from config import settings
+
 import asyncio
 import json
 import logging
 
 import httpx
 from fastapi import HTTPException
-
 from schemas.qwen import GenerationSettings
 from services.QueenModels import QwenResponseError, QwenStrategy
 
@@ -27,7 +28,7 @@ async def generate_chat_title(model: str, question: str, answer: str) -> str | N
         )},
     ]
     try:
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(settings.CHAT_TITLE_TIMEOUT):
             result = await QwenStrategy(model, GenerationSettings(think=False)).chat(messages)
         title = " ".join(result.split()).strip('"\'«»`# ')
         return title[:80].rstrip() or None

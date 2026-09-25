@@ -1,11 +1,10 @@
 from uuid import UUID
 
+from database.history import connect
 from fastapi import HTTPException
 from psycopg import sql
-from psycopg.types.json import Jsonb
 from psycopg.errors import ForeignKeyViolation
-
-from database.history import connect
+from psycopg.types.json import Jsonb
 from schemas.scenarios import ScenarioCreate, ScenarioUpdate
 
 _COLUMNS = "id, title, description, table_name, columns_description, scenario, visible_jurpers, is_active, create_user, edit_user, create_time, edit_time"

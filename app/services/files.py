@@ -1,7 +1,7 @@
 import base64
 import io
 import json
-from os import environ
+from config import settings
 from pathlib import Path
 from uuid import UUID, uuid4
 from zipfile import ZipFile
@@ -12,12 +12,10 @@ from openpyxl import load_workbook
 from PIL import Image
 from starlette.concurrency import run_in_threadpool
 
-MAX_FILE_BYTES = int(environ.get("MAX_FILE_BYTES", str(5 * 1024 * 1024)))
-if MAX_FILE_BYTES <= 0:
-    raise ValueError("MAX_FILE_BYTES должен быть положительным")
-MAX_TEXT_CHARS = 3000000
-MAX_FILES = 5
-MAX_IMAGE_PIXELS = 20_000_000
+MAX_FILE_BYTES = settings.MAX_FILE_BYTES
+MAX_TEXT_CHARS = settings.MAX_TEXT_CHARS
+MAX_FILES = settings.MAX_FILES
+MAX_IMAGE_PIXELS = settings.MAX_IMAGE_PIXELS
 IMAGE_FORMATS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG"}
 MEDIA_TYPES = {
     '.png': 'image/png',
@@ -37,7 +35,7 @@ def validate_image(content: bytes, suffix: str) -> None:
         if image.format != IMAGE_FORMATS[suffix]:
             raise HTTPException(422, "Содержимое изображения не соответствует расширению")
         if image.width * image.height > MAX_IMAGE_PIXELS:
-            raise HTTPException(413, "Изображение превышает 20 мегапикселей")
+            raise HTTPException(413, f"Изображение превышает {MAX_IMAGE_PIXELS} пикселей")
         if getattr(image, "n_frames", 1) != 1:
             raise HTTPException(422, "Анимированные изображения не поддерживаются")
         image.verify()
@@ -54,23 +52,23 @@ def extract_text(content: bytes, suffix: str) -> str:
             raise ValueError('Binary content')
     else:
         with ZipFile(io.BytesIO(content)) as archive:
-            if sum(item.file_size for item in archive.infolist()) > 20 * 1024 * 1024:
-                raise HTTPException(413, 'Распакованный Excel превышает 20 МБ')
+            if sum(item.file_size for item in archive.infolist()) > settings.MAX_EXCEL_UNPACKED_BYTES:
+                raise HTTPException(413, f'Распакованный Excel превышает {settings.MAX_EXCEL_UNPACKED_BYTES} байт')
         workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=False, keep_links=False)
         lines = []
         length = 0
         has_data = False
         try:
             for sheet in workbook:
-                if (sheet.max_row or 0) > 1000 or (sheet.max_column or 0) > 100:
-                    raise HTTPException(413, 'Для Excel допускается до 1000 строк и 100 колонок на лист')
+                if (sheet.max_row or 0) > settings.MAX_EXCEL_ROWS or (sheet.max_column or 0) > settings.MAX_EXCEL_COLUMNS:
+                    raise HTTPException(413, f'Для Excel допускается до {settings.MAX_EXCEL_ROWS} строк и {settings.MAX_EXCEL_COLUMNS} колонок на лист')
                 # Producers sometimes write A1:A1 even when a sheet contains more data.
                 sheet.reset_dimensions()
                 lines.append(f'Лист: {sheet.title}')
                 length += len(lines[-1]) + 1
                 for row_number, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                    if row_number > 1000 or len(row) > 100:
-                        raise HTTPException(413, "Для Excel допускается до 1000 строк и 100 колонок на лист")
+                    if row_number > settings.MAX_EXCEL_ROWS or len(row) > settings.MAX_EXCEL_COLUMNS:
+                        raise HTTPException(413, f'Для Excel допускается до {settings.MAX_EXCEL_ROWS} строк и {settings.MAX_EXCEL_COLUMNS} колонок на лист')
                     if all(value is None for value in row):
                         continue
                     has_data = True
@@ -148,7 +146,7 @@ async def file_context(connection, file_ids: list[UUID], conversation_id: UUID |
     if not identifiers:
         return []
     if len(identifiers) > MAX_FILES:
-        raise HTTPException(413, 'В одном запросе или диалоге допускается до 5 файлов')
+        raise HTTPException(413, f'В одном запросе или диалоге допускается до {MAX_FILES} файлов')
     cursor = await connection.execute(
         "SELECT id, filename, media_type, extracted_text, "
         "CASE WHEN media_type IN ('image/png', 'image/jpeg') THEN content END AS image_content "

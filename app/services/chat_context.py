@@ -1,18 +1,25 @@
 import json
+from config import settings
 
 
-async def load_chat_context(connection, user_jurpers: int) -> tuple[list[dict], dict[str, dict]]:
+async def load_chat_context(connection, user_jurpers: int, *, is_admin: bool = False) -> tuple[list[dict], dict[str, dict]]:
     cursor = await connection.execute(
-        "SELECT prompt FROM system_prompt WHERE is_active ORDER BY order_num, create_time, id"
+        "SELECT prompt FROM system_prompt WHERE is_active AND NOT %s ORDER BY order_num, create_time, id",
+        (is_admin and settings.ADMIN_IGNORE_SYSTEM_PROMPTS,)
     )
     messages = [{"role": "system", "content": row["prompt"]} for row in await cursor.fetchall()]
     cursor = await connection.execute(
         "SELECT id, title, description, table_name, columns_description, scenario, visible_jurpers "
         "FROM scenarios WHERE is_active "
-        "AND (cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
-        "ORDER BY create_time, id", (user_jurpers,),
+        "AND (%s OR cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
+        "ORDER BY create_time, id", (is_admin, user_jurpers),
     )
     scenarios = {str(row["id"]): row for row in await cursor.fetchall()}
+    if is_admin:
+        messages.append({"role": "system", "content": "Режим администратора: доступны все активные сценарии и все юрлица. "
+                         "При запросе о конкретной организации задавай явные фильтры инструмента. "
+                         "Для проверки анализа указывай использованные таблицы, фильтры и расчёты. "
+                         "Не выдумывай данные и результаты запросов."})
     if scenarios:
         messages.append({
             "role": "system",
@@ -20,8 +27,9 @@ async def load_chat_context(connection, user_jurpers: int) -> tuple[list[dict], 
                 "Ниже справочник активных сценариев. Выбери подходящий к вопросу и следуй его "
                 "алгоритму анализа. Для фактов из БД вызывай query_scenario, затем анализируй "
                 "полученные строки и формируй конечный ответ. Можно выполнить несколько запросов. "
-                "Сервер сам ограничивает каждый запрос по jurpers пользователя и, если указана, "
-                "organization. Эти фильтры нельзя отменять или обходить. "
+                + ("Фиксированного ограничения по jurpers/organization для администратора нет. " if is_admin else
+                 "Сервер ограничивает запрос по jurpers пользователя и выбранной organization. Эти ограничения нельзя обходить. ")
+                +
                 "Если подходящего сценария нет, отвечай по доступной информации. "
                 "Не выдумывай результаты запросов и не утверждай, что запрос выполнен, без результата "
                 "инструмента. Ошибка инструмента не означает отсутствие задолженности. "

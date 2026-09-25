@@ -12,6 +12,7 @@ psycopg = {extras = ["binary", "pool"], version = "*"}
 fastapi = "*"
 uvicorn = "*"
 httpx = "*"
+oracledb = "*"
 
 [requires]
 python_version = "3.14"

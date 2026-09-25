@@ -8,10 +8,11 @@ from schemas.qwen import (
     HistoryRequest,
     HistoryResponse,
 )
+from services.user_context import user_context
 from services.chat_context import load_chat_context
 from services.chat_title import generate_chat_title
 from services.files import file_context
-from services.QueenModels import resolve_model
+from services.QueenModels import QwenStrategy, resolve_model
 from services.scenario_runner import answer_with_scenarios
 
 
@@ -41,16 +42,18 @@ async def create_chat(payload: ChatCreateRequest) -> ChatCreateResponse:
         return ChatCreateResponse(**await cursor.fetchone())
 
 
-async def chat(payload: ChatRequest) -> ChatResponse:
+async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
     message = {"role": "user", "content": payload.message}
 
     if not payload.save_history:
         model = await resolve_model(payload.model)
         async with await connect() as connection:
-            system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers)
+            profile, is_admin = await user_context(connection, payload, trusted_source)
+            system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers, is_admin=is_admin)
+            system_messages.append(profile)
             context = await file_context(connection, payload.file_ids)
             answer, files = await answer_with_scenarios(
-                connection, model, payload, [*system_messages, *context, message], scenarios,
+                connection, model, payload, [*system_messages, *context, message], scenarios, is_admin=is_admin,
             )
         return ChatResponse(model=model, response=answer, files=files)
 
@@ -71,26 +74,25 @@ async def chat(payload: ChatRequest) -> ChatResponse:
 
         conversation_id = conversation["id"]
         cursor = await connection.execute(
-            "SELECT role, content FROM messages WHERE conversation_id = %s "
+            "SELECT role, content FROM messages WHERE conversation_id = %s AND content <> '' "
             "ORDER BY id DESC LIMIT 20", (conversation_id,)
         )
 
         history = list(reversed(await cursor.fetchall()))
         context = await file_context(connection, payload.file_ids, conversation_id)
-        system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers)
+        profile, is_admin = await user_context(connection, payload, trusted_source)
+        system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers, is_admin=is_admin)
+        system_messages.append(profile)
         answer, files = await answer_with_scenarios(
-            connection, model, payload, [*system_messages, *context, *history, message], scenarios,
+            connection, model, payload, [*system_messages, *history, *context, message], scenarios, is_admin=is_admin,
         )
-        async with connection.cursor() as cursor:
-            await cursor.executemany(
-                "INSERT INTO messages (conversation_id, role, content) VALUES (%s, %s, %s)",
-                [(conversation_id, "user", payload.message), (conversation_id, "assistant", answer)],
-            )
+        await save_message(connection, conversation_id, "user", payload.message, payload.file_ids)
+        await save_message(connection, conversation_id, "assistant", answer, [file.file_id for file in files])
         title = conversation["title"]
         if title is None:
             # Retry an earlier failed title generation using the first exchange.
             cursor = await connection.execute(
-                "SELECT content FROM messages WHERE conversation_id = %s ORDER BY id LIMIT 2",
+                "SELECT content FROM messages WHERE conversation_id = %s AND content <> '' ORDER BY id LIMIT 2",
                 (conversation_id,),
             )
             first_exchange = await cursor.fetchall()
@@ -102,7 +104,7 @@ async def chat(payload: ChatRequest) -> ChatResponse:
     return ChatResponse(conversation_id=conversation_id, title=title, model=model, response=answer, files=files)
 
 
-async def history(payload: HistoryRequest) -> dict:
+async def history(payload: HistoryRequest) -> HistoryResponse:
     async with await connect() as connection:
         cursor = await connection.execute(
             "SELECT c.id FROM conversations c JOIN users u ON u.id = c.user_uuid "
@@ -115,7 +117,7 @@ async def history(payload: HistoryRequest) -> dict:
 
         cursor = await connection.execute(
             """
-            SELECT role, content
+            SELECT id, role, content
             FROM messages
             WHERE conversation_id = %s
             ORDER BY id ASC
@@ -128,7 +130,15 @@ async def history(payload: HistoryRequest) -> dict:
             ),
         )
 
-        return HistoryResponse(history=await cursor.fetchall())
+        rows = await cursor.fetchall()
+        for row in rows:
+            files_cursor = await connection.execute(
+                "SELECT f.id AS file_id, f.filename, f.media_type, f.size_bytes, f.created_at "
+                "FROM message_files mf JOIN files f ON f.id=mf.file_id WHERE mf.message_id=%s ORDER BY f.created_at, f.id",
+                (row.pop("id"),),
+            )
+            row["files"] = await files_cursor.fetchall()
+        return HistoryResponse(history=rows, files=await conversation_attachments(connection, payload.conversation_id))
 
 async def list_chats(user_login: str, user_jurpers: int, limit: int, offset: int):
     async with await connect() as connection:
@@ -151,3 +161,40 @@ async def delete_chat(conversation_id, user_login: str, user_jurpers: int):
         )
         if await cursor.fetchone() is None:
             raise HTTPException(404, "Диалог не найден")
+
+
+async def conversation_attachments(connection, conversation_id):
+    cursor = await connection.execute(
+        "SELECT f.id AS file_id, f.filename, f.media_type, f.size_bytes, f.created_at "
+        "FROM conversation_files cf JOIN files f ON f.id=cf.file_id "
+        "WHERE cf.conversation_id=%s ORDER BY f.created_at, f.id", (conversation_id,))
+    return await cursor.fetchall()
+
+
+async def save_message(connection, conversation_id, role, content, file_ids):
+    cursor = await connection.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES (%s,%s,%s) RETURNING id",
+        (conversation_id, role, content),)
+    message_id = (await cursor.fetchone())["id"]
+    for file_id in dict.fromkeys(file_ids):
+        await connection.execute("INSERT INTO message_files (message_id,file_id) VALUES (%s,%s)", (message_id, file_id))
+
+
+async def attach_files(conversation_id, payload):
+    async with await connect() as connection:
+        cursor = await connection.execute(
+            "SELECT c.id, c.model FROM conversations c JOIN users u ON u.id=c.user_uuid "
+            "WHERE c.id=%s AND u.login=%s AND u.jurpers=%s FOR UPDATE OF c",
+            (conversation_id, payload.user_login, payload.user_jurpers),)
+        conversation = await cursor.fetchone()
+        if conversation is None:
+            raise HTTPException(404, "Диалог не найден")
+        existing = {row["file_id"] for row in await conversation_attachments(connection, conversation_id)}
+        new_ids = [file_id for file_id in dict.fromkeys(payload.file_ids) if file_id not in existing]
+        context = await file_context(connection, payload.file_ids, conversation_id)
+        if any(item.get("images") for item in context):
+            await QwenStrategy(conversation["model"]).ensure_vision()
+        if new_ids:
+            await save_message(connection, conversation_id, "user", "", new_ids)
+            await connection.execute("UPDATE conversations SET last_message_at=now() WHERE id=%s", (conversation_id,))
+        return {"conversation_id": conversation_id, "files": await conversation_attachments(connection, conversation_id)}

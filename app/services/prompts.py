@@ -1,10 +1,9 @@
 from uuid import UUID
 
+from database.history import connect
 from fastapi import HTTPException
 from psycopg import sql
 from psycopg.errors import ForeignKeyViolation
-
-from database.history import connect
 from schemas.prompts import PromptCreate, PromptUpdate
 
 _COLUMNS = "id, order_num, prompt, is_active, create_user, edit_user, create_time, edit_time"

@@ -1,5 +1,5 @@
 from contextlib import asynccontextmanager
-from os import environ
+from config import settings
 
 import httpx
 from fastapi import HTTPException
@@ -17,9 +17,11 @@ _client: httpx.AsyncClient | None = None
 async def qwen_lifespan():
     global _client
     async with httpx.AsyncClient(
-        base_url=environ.get("QWEN_URL", "http://192.168.68.56:11434").rstrip("/"),
-        timeout=httpx.Timeout(connect=10, read=300, write=30, pool=10),
-        limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        base_url=settings.QWEN_URL.rstrip("/"),
+        timeout=httpx.Timeout(connect=settings.QWEN_CONNECT_TIMEOUT, read=settings.QWEN_READ_TIMEOUT,
+                              write=settings.QWEN_WRITE_TIMEOUT, pool=settings.QWEN_POOL_TIMEOUT),
+        limits=httpx.Limits(max_connections=settings.QWEN_MAX_CONNECTIONS,
+                            max_keepalive_connections=settings.QWEN_KEEPALIVE_CONNECTIONS),
         trust_env=False,
     ) as client:
         _client = client
@@ -32,7 +34,7 @@ async def qwen_lifespan():
 async def list_models() -> list[str]:
     if _client is None:
         raise RuntimeError("Ollama client is not initialized: start the application lifespan")
-    response = await _client.get("/api/tags", timeout=10)
+    response = await _client.get("/api/tags", timeout=settings.QWEN_METADATA_TIMEOUT)
     response.raise_for_status()
     try:
         data = response.json()
@@ -103,7 +105,7 @@ class QwenStrategy:
     async def ensure_vision(self) -> None:
         if _client is None:
             raise RuntimeError("Ollama client is not initialized: start the application lifespan")
-        response = await _client.post("/api/show", json={"model": self.model}, timeout=10)
+        response = await _client.post("/api/show", json={"model": self.model}, timeout=settings.QWEN_METADATA_TIMEOUT)
         if response.status_code == 404:
             raise HTTPException(422, f"Модель {self.model} не установлена в Ollama")
         response.raise_for_status()

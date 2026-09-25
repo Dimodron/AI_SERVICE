@@ -1,6 +1,9 @@
 from uuid import UUID
-from fastapi import APIRouter, Query, Response
+
+from fastapi import APIRouter, Depends, Query, Response
 from schemas.qwen import (
+    AttachFilesRequest,
+    AttachFilesResponse,
     ChatCreateRequest,
     ChatCreateResponse,
     ChatRequest,
@@ -10,11 +13,12 @@ from schemas.qwen import (
 )
 from services.chat import chat as chat_service
 from services.chat import create_chat as create_chat_service
+from services.chat import delete_chat, list_chats, attach_files
+from services.user_context import trusted_chat_source
 from services.chat import history as history_service
-from services.chat import list_chats, delete_chat
 from services.QueenModels import list_models
 
-router = APIRouter(prefix="/api", tags=["Qwen"])
+router = APIRouter(prefix="/api", tags=["Qwen"], dependencies=[Depends(trusted_chat_source)])
 
 
 @router.get("/models", response_model=list[str])
@@ -28,8 +32,8 @@ async def create_chat(payload: ChatCreateRequest):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(payload: ChatRequest):
-    return await chat_service(payload)
+async def chat(payload: ChatRequest, trusted_source: bool = Depends(trusted_chat_source)):
+    return await chat_service(payload, trusted_source=trusted_source)
 
 
 @router.post("/chat/history", response_model=HistoryResponse)
@@ -55,3 +59,8 @@ async def remove_chat(
 ):
     await delete_chat(conversation_id, user_login, user_jurpers)
     return Response(status_code=204)
+
+
+@router.post("/chat/{conversation_id}/files", response_model=AttachFilesResponse)
+async def attach(conversation_id: UUID, payload: AttachFilesRequest):
+    return await attach_files(conversation_id, payload)
