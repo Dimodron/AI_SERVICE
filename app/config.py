@@ -40,6 +40,8 @@ class Settings(BaseModel):
     DATA_IMPORT_TIMEOUT: PositiveInt
     USER_CONTEXT_TABLE: str = "oracle_data.gpt_user_context"
     ADMIN_IGNORE_SYSTEM_PROMPTS: bool = True
+    JURPERS_DIRECTORY_TABLE: str = "oracle_data.zv_gpt_jurpers"
+    ORGANIZATION_DIRECTORY_TABLE: str = "oracle_data.zv_gpt_organizations"
 
     @model_validator(mode="after")
     def validate_connections(self):
@@ -48,8 +50,10 @@ class Settings(BaseModel):
         if not self.QWEN_URL.startswith(("http://", "https://")):
             raise ValueError("QWEN_URL должен начинаться с http:// или https://")
         import re
-        if self.USER_CONTEXT_TABLE and not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}\.[a-zA-Z_][a-zA-Z0-9_]{0,62}", self.USER_CONTEXT_TABLE):
-            raise ValueError("USER_CONTEXT_TABLE: ожидается schema.table либо пустая строка")
+        for name in ("USER_CONTEXT_TABLE", "JURPERS_DIRECTORY_TABLE", "ORGANIZATION_DIRECTORY_TABLE"):
+            value = getattr(self, name)
+            if value and not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]{0,62}\.[a-zA-Z_][a-zA-Z0-9_]{0,62}", value):
+                raise ValueError(f"{name}: ожидается schema.table либо пустая строка")
         return self
 
 

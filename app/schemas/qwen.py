@@ -83,6 +83,8 @@ class ChatRequest(GenerationSettings):
 
     @model_validator(mode="after")
     def validate_history(self):
+        if self.user_organization == 0:
+            self.user_organization = None
         if self.save_history and self.conversation_id is None:
             raise ValueError("Сначала создайте диалог через POST /api/chat/create и передайте conversation_id")
         if self.conversation_id and not self.save_history:

@@ -38,3 +38,7 @@ DATA_IMPORT_TIMEOUT = 600
 USER_CONTEXT_TABLE = "oracle_data.zv_gpt_userinfo"
 # Только для подтверждённого администратора: не применять промпты из system_prompt.
 ADMIN_IGNORE_SYSTEM_PROMPTS = true
+
+# Справочники названий текущего выбора Oracle/APEX. Пустая строка отключает.
+JURPERS_DIRECTORY_TABLE = "oracle_data.zv_gpt_jurpers"
+ORGANIZATION_DIRECTORY_TABLE = "oracle_data.zv_gpt_organizations"

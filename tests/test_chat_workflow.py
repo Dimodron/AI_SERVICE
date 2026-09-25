@@ -220,3 +220,35 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             message, _ = await user_context(conn, matching)
             data = json.loads(message['content'].split('\n', 1)[1])
             self.assertEqual(data['selected_jurpers_name'], 'Минздрав МО')
+
+    async def test_directories_resolve_current_context_separately_from_profile(self):
+        async with await connect() as conn:
+            await conn.execute("CREATE TABLE oracle_data.gpt_user_context (login text, jurpers bigint, jurpers_name text)")
+            await conn.execute("INSERT INTO oracle_data.gpt_user_context VALUES ('alice',1351099,'Личное юрлицо')")
+            await conn.execute("CREATE TABLE oracle_data.zv_gpt_jurpers (jurpers numeric, jurpers_name text)")
+            await conn.execute("INSERT INTO oracle_data.zv_gpt_jurpers VALUES (10,'Текущее юрлицо')")
+            await conn.execute("CREATE TABLE oracle_data.zv_gpt_organizations (organization numeric, jurpers numeric, organization_name text)")
+            await conn.execute("INSERT INTO oracle_data.zv_gpt_organizations VALUES (20,10,'Текущая организация'), (30,99,'Чужая организация')")
+            for org, expected in ((20,'Текущая организация'), (30,None), (None,None), (0,None)):
+                payload = ChatRequest(**self.owner, message='Где работаю?', user_organization=org)
+                message, _ = await user_context(conn, payload)
+                data = json.loads(message['content'].split('\n',1)[1])
+                self.assertEqual(data['profile']['jurpers_name'],'Личное юрлицо')
+                self.assertEqual(data['selected_jurpers_name'],'Текущее юрлицо')
+                self.assertEqual(data['selected_organization_name'],expected)
+                if org == 0:
+                    self.assertIsNone(payload.user_organization)
+                    self.assertIsNone(data['selected_organization'])
+
+    async def test_missing_or_ambiguous_directory_does_not_break_chat(self):
+        async with await connect() as conn:
+            await conn.execute('CREATE TABLE oracle_data.zv_gpt_jurpers (jurpers numeric, jurpers_name text)')
+            await conn.execute("INSERT INTO oracle_data.zv_gpt_jurpers VALUES (10,'One'), (10,'Two')")
+            # Missing organization_name is handled inside a savepoint.
+            await conn.execute('CREATE TABLE oracle_data.zv_gpt_organizations (organization numeric, jurpers numeric)')
+            payload = ChatRequest(**self.owner,message='test',user_organization=20)
+            message, _ = await user_context(conn, payload)
+            data = json.loads(message['content'].split('\n',1)[1])
+            self.assertIsNone(data['selected_jurpers_name'])
+            self.assertIsNone(data['selected_organization_name'])
+            await conn.execute('SELECT 1')
