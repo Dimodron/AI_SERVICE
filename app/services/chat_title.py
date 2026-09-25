@@ -1,10 +1,9 @@
-from config import settings
-
 import asyncio
 import json
 import logging
 
 import httpx
+from config import settings
 from fastapi import HTTPException
 from schemas.qwen import GenerationSettings
 from services.QueenModels import QwenResponseError, QwenStrategy

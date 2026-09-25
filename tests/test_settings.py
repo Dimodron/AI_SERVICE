@@ -85,3 +85,18 @@ asyncio.run(verify())
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class DefaultModelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_configured_default_and_explicit_selection(self):
+        from unittest.mock import AsyncMock, patch
+        from fastapi import HTTPException
+        from services.QueenModels import resolve_model
+        from config import settings
+        with patch('services.QueenModels.list_models', AsyncMock(return_value=['another', settings.DEFAULT_MODEL])):
+            self.assertEqual(await resolve_model(None), settings.DEFAULT_MODEL)
+            self.assertEqual(await resolve_model('another'), 'another')
+        with patch('services.QueenModels.list_models', AsyncMock(return_value=['another'])):
+            with self.assertRaises(HTTPException) as error:
+                await resolve_model(None)
+            self.assertEqual(error.exception.status_code, 422)

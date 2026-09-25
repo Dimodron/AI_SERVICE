@@ -20,18 +20,18 @@ async def create_chat(payload: ChatCreateRequest) -> ChatCreateResponse:
     model = await resolve_model(payload.model)
     async with await connect() as connection:
         await connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s))",
-            (payload.user_login, str(payload.user_jurpers)),
+            "SELECT pg_advisory_xact_lock(hashtext('chat-owner'), hashtext(%s))",
+            (payload.user_login,),
         )
         cursor = await connection.execute(
-            "SELECT id FROM users WHERE login = %s AND jurpers = %s ORDER BY created_at, id LIMIT 1",
-            (payload.user_login, payload.user_jurpers),
+            "SELECT id FROM users WHERE login = %s ORDER BY created_at, id LIMIT 1",
+            (payload.user_login,),
         )
         user = await cursor.fetchone()
         if user is None:
             cursor = await connection.execute(
-                "INSERT INTO users (login, jurpers) VALUES (%s, %s) RETURNING id",
-                (payload.user_login, payload.user_jurpers),
+                "INSERT INTO users (login) VALUES (%s) RETURNING id",
+                (payload.user_login,),
             )
             user = await cursor.fetchone()
         cursor = await connection.execute(
@@ -74,8 +74,8 @@ async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
         await connection.execute("SET LOCAL lock_timeout = '310s'")
         cursor = await connection.execute(
             "SELECT c.id, c.model, c.title FROM conversations c JOIN users u ON u.id = c.user_uuid "
-            "WHERE c.id = %s AND u.login = %s AND u.jurpers = %s FOR UPDATE OF c",
-            (payload.conversation_id, payload.user_login, payload.user_jurpers),
+            "WHERE c.id = %s AND u.login = %s FOR UPDATE OF c",
+            (payload.conversation_id, payload.user_login),
         )
         conversation = await cursor.fetchone()
         if conversation is None:
@@ -121,8 +121,8 @@ async def history(payload: HistoryRequest) -> HistoryResponse:
     async with await connect() as connection:
         cursor = await connection.execute(
             "SELECT c.id, c.model FROM conversations c JOIN users u ON u.id = c.user_uuid "
-            "WHERE c.id = %s AND u.login = %s AND u.jurpers = %s",
-            (payload.conversation_id, payload.user_login, payload.user_jurpers),
+            "WHERE c.id = %s AND u.login = %s",
+            (payload.conversation_id, payload.user_login),
         )
 
         conversation = await cursor.fetchone()
@@ -154,24 +154,24 @@ async def history(payload: HistoryRequest) -> HistoryResponse:
             row["files"] = await files_cursor.fetchall()
         return HistoryResponse(model=conversation["model"], history=rows, files=await conversation_attachments(connection, payload.conversation_id))
 
-async def list_chats(user_login: str, user_jurpers: int, limit: int, offset: int):
+async def list_chats(user_login: str, user_jurpers: int | None, limit: int, offset: int):
     async with await connect() as connection:
         cursor = await connection.execute(
             "SELECT c.id AS conversation_id, c.model, c.title, c.created_at, c.last_message_at "
             "FROM conversations c JOIN users u ON u.id = c.user_uuid "
-            "WHERE u.login = %s AND u.jurpers = %s "
+            "WHERE u.login = %s "
             "ORDER BY COALESCE(c.last_message_at, c.created_at) DESC, c.id DESC LIMIT %s OFFSET %s",
-            (user_login, user_jurpers, limit, offset),
+            (user_login, limit, offset),
         )
         return await cursor.fetchall()
 
 
-async def delete_chat(conversation_id, user_login: str, user_jurpers: int):
+async def delete_chat(conversation_id, user_login: str, user_jurpers: int | None):
     async with await connect() as connection:
         cursor = await connection.execute(
             "DELETE FROM conversations c USING users u WHERE c.user_uuid = u.id "
-            "AND c.id = %s AND u.login = %s AND u.jurpers = %s RETURNING c.id",
-            (conversation_id, user_login, user_jurpers),
+            "AND c.id = %s AND u.login = %s RETURNING c.id",
+            (conversation_id, user_login),
         )
         if await cursor.fetchone() is None:
             raise HTTPException(404, "Диалог не найден")
@@ -198,8 +198,8 @@ async def attach_files(conversation_id, payload):
     async with await connect() as connection:
         cursor = await connection.execute(
             "SELECT c.id, c.model FROM conversations c JOIN users u ON u.id=c.user_uuid "
-            "WHERE c.id=%s AND u.login=%s AND u.jurpers=%s FOR UPDATE OF c",
-            (conversation_id, payload.user_login, payload.user_jurpers),)
+            "WHERE c.id=%s AND u.login=%s FOR UPDATE OF c",
+            (conversation_id, payload.user_login),)
         conversation = await cursor.fetchone()
         if conversation is None:
             raise HTTPException(404, "Диалог не найден")
@@ -219,8 +219,8 @@ async def change_chat_model(conversation_id, payload):
         await connection.execute("SET LOCAL lock_timeout = '10s'")
         cursor = await connection.execute(
             "SELECT c.id FROM conversations c JOIN users u ON u.id=c.user_uuid "
-            "WHERE c.id=%s AND u.login=%s AND u.jurpers=%s FOR UPDATE OF c",
-            (conversation_id, payload.user_login, payload.user_jurpers),)
+            "WHERE c.id=%s AND u.login=%s FOR UPDATE OF c",
+            (conversation_id, payload.user_login),)
         if await cursor.fetchone() is None:
             raise HTTPException(404, "Диалог не найден")
         model = await resolve_model(payload.model)

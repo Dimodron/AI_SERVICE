@@ -13,7 +13,7 @@ async function until(check) {
     for (let i = 0; i < 200; i++) { if (check()) return; await delay(); }
     throw new Error('UI timeout');
 }
-async function fixture() {
+async function fixture(admin = true) {
     const dom = new JSDOM(`<main id="chat_body"><div class="head-actions"></div><div class="chathead"></div><div id="chatStatus"></div><div id="chatTitle"></div><div id="chatMessages"></div><div id="chatList"></div><input id="chatSearch"><button id="newChatBtn"><span class="new-chat-plus"></span></button><div class="composer"><div id="selectedFiles"></div><textarea id="prompt"></textarea><button id="attachBtn"></button><button id="sendBtn"></button></div><input type="file" id="P237_GPT_FILES"><div class="hint"></div></main>`, {runScripts:'outside-only', url:'http://example.test'});
     const win = dom.window, $ = jquery(win);
     let active = '', fail = false, stored = false, model = 'test';
@@ -25,7 +25,7 @@ async function fixture() {
         process: (name, data, options) => {
             calls.push({name, data});
             setTimeout(() => {
-                if (name === 'GPTConfig') return options.success({max_files:5,max_file_bytes:5242880,extensions:['.txt'],models:['test','second']});
+                if (name === 'GPTConfig') return options.success({max_files:5,max_file_bytes:5242880,extensions:['.txt'],default_model:'test',can_select_model:admin,models:admin?['test','second']:[]});
                 if (name === 'GPTListChats') return options.success([{conversation_id:cid,model:'test',title:'Chat'}]);
                 if (name === 'GPTCreateChat') return options.success({conversation_id:cid,model:'test'});
                 if (name === 'GPTFileChunk' || name === 'GPTFileCancel') return options.success({});
@@ -113,6 +113,17 @@ async function fixture() {
     assert.equal(retry.calls.filter(c=>c.name==='GPTFileFinish').length, 1, 'retry must reuse uploaded file');
     assert.equal(retry.$('#prompt').val(), '');
     retry.dom.window.close();
+    const ordinary = await fixture(false);
+    assert.equal(ordinary.$('#gptModel').css('display'), 'none');
+    assert.equal(ordinary.$('#gptModel').prop('disabled'), true);
+    ordinary.$('#gptModel').val('second').trigger('change');
+    assert.equal(ordinary.calls.filter(c=>c.name==='GPTSetModel').length, 0);
+    ordinary.$('#prompt').val('Вопрос');
+    ordinary.$('#sendBtn').trigger('click');
+    await until(() => !ordinary.$('#sendBtn').prop('disabled'));
+    assert.equal(ordinary.calls.find(c=>c.name==='GPTCreateChat').data.x01, '');
+    assert.equal(ordinary.calls.filter(c=>c.name==='GPTChat').length, 1);
+    ordinary.dom.window.close();
     const switching = await fixture();
     await switching.pick('select');
     switching.$('#prompt').val('Черновик');

@@ -23,6 +23,7 @@ class Settings(BaseModel):
     MAX_EXCEL_ROWS: PositiveInt
     MAX_EXCEL_COLUMNS: PositiveInt
     QWEN_URL: str = Field(min_length=1)
+    DEFAULT_MODEL: str = Field(default="qwen3.5:9b", min_length=1, pattern=r"\S")
     QWEN_CONNECT_TIMEOUT: PositiveInt
     QWEN_READ_TIMEOUT: PositiveInt
     QWEN_WRITE_TIMEOUT: PositiveInt

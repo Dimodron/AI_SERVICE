@@ -297,3 +297,57 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             result = await change_chat_model(self.cid,request.model_copy(update={'model':'vision-model'}))
             self.assertEqual(result.model,'vision-model')
             vision.assert_awaited_once()
+
+    async def test_chat_belongs_to_login_across_jurpers(self):
+        from schemas.qwen import ChatCreateRequest, ChatModelRequest
+        from services.chat import create_chat, list_chats, change_chat_model
+        with patch('services.chat.resolve_model',AsyncMock(return_value='test')):
+            created = await create_chat(ChatCreateRequest(user_login='alice',user_jurpers=99))
+        async with await connect() as conn:
+            row = await (await conn.execute("SELECT count(*) n FROM users WHERE login='alice'")).fetchone()
+            self.assertEqual(row['n'],1)
+        self.assertEqual(len(await list_chats('alice',99,100,0)),2)
+        owner = dict(user_login='alice',user_jurpers=99)
+        await attach_files(self.cid,AttachFilesRequest(**owner,file_ids=[self.fid]))
+        self.assertEqual(len((await history(HistoryRequest(**owner,conversation_id=self.cid))).files),1)
+        with patch('services.chat.resolve_model',AsyncMock(return_value='second')):
+            await change_chat_model(self.cid,ChatModelRequest(**owner,model='second'))
+        answer = AsyncMock(return_value=('ok',[]))
+        with patch('services.chat.resolve_model',AsyncMock(return_value='second')),patch('services.chat.answer_with_scenarios',answer):
+            await chat(ChatRequest(**owner,conversation_id=self.cid,save_history=True,message='Текущее юрлицо'))
+        self.assertEqual(answer.call_args.args[2].user_jurpers,99)
+        self.assertIn('"selected_jurpers": 99',answer.call_args.args[3][0]['content'])
+        await delete_chat(created.conversation_id,'alice',99)
+        self.assertEqual(len(await list_chats('alice',None,100,0)),1)
+
+    async def test_legacy_duplicate_accounts_keep_chats_visible_without_new_duplicates(self):
+        from schemas.qwen import ChatCreateRequest
+        from services.chat import create_chat, list_chats
+        async with await connect() as conn:
+            user = await (await conn.execute("INSERT INTO users(login,jurpers) VALUES ('alice',99) RETURNING id")).fetchone()
+            await conn.execute("INSERT INTO conversations(user_uuid,model) VALUES (%s,'test')",(user['id'],))
+        with patch('services.chat.resolve_model',AsyncMock(return_value='test')):
+            await create_chat(ChatCreateRequest(user_login='alice'))
+        self.assertEqual(len(await list_chats('alice',None,100,0)),3)
+        async with await connect() as conn:
+            row = await (await conn.execute("SELECT count(*) n FROM users WHERE login='alice'")).fetchone()
+            self.assertEqual(row['n'],2)
+        self.assertFalse(await list_chats('other',10,100,0))
+        with self.assertRaises(HTTPException):
+            await history(HistoryRequest(user_login='other',conversation_id=self.cid))
+
+    async def test_jur_pers_scope_uses_request_not_stored_account(self):
+        async with await connect() as conn:
+            await conn.execute('CREATE TABLE oracle_data.debts(jur_pers bigint, amount numeric)')
+            await conn.execute('INSERT INTO oracle_data.debts VALUES (10,100),(99,200)')
+            scenario = {'table_name':'oracle_data.debts','visible_jurpers':[], 'columns_description':{'amount':'Сумма','jur_pers':'Юрлицо'}}
+            payload = ChatRequest(user_login='alice',user_jurpers=99,message='Анализ')
+            query = ScenarioQuery(scenario_id=uuid4(),columns=['amount'])
+            result = await query_scenario(conn,scenario,query,payload)
+            self.assertEqual([r['amount'] for r in result['rows']],[200])
+            result = await query_scenario(conn,scenario,query,payload,is_admin=True)
+            self.assertEqual(len(result['rows']),2)
+            from schemas.scenario_query import QueryFilter
+            query.filters=[QueryFilter(column='jur_pers',value=99)]
+            result = await query_scenario(conn,scenario,query,payload,is_admin=True)
+            self.assertEqual([r['amount'] for r in result['rows']],[200])

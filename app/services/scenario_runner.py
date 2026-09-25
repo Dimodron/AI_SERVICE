@@ -53,7 +53,6 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
     # Ownership predicates are fixed by the application, never by the model.
     if not is_admin and scenario["visible_jurpers"] and payload.user_jurpers not in scenario["visible_jurpers"]:
         raise ValueError("Сценарий недоступен этому юрлицу")
-    scope_column = "jurpers"
     if not scenario["table_name"]:
         raise ValueError("У сценария не указана таблица")
     schema, table = _table_parts(scenario["table_name"])
@@ -70,11 +69,11 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
         "SELECT a.attname FROM pg_catalog.pg_attribute a "
         "JOIN pg_catalog.pg_class c ON c.oid = a.attrelid "
         "JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace "
-        "WHERE n.nspname = %s AND c.relname = %s AND c.relkind IN ('r', 'p', 'v', 'm', 'f') "
+        "WHERE n.nspname = %s AND c.relname = %s AND c.relkind IN ('r', 'p') "
         "AND a.attnum > 0 AND NOT a.attisdropped", (schema, table),
     )
-    print(cursor)
     actual = {row["attname"] for row in await cursor.fetchall()}
+    scope_column = "jurpers" if "jurpers" in actual else "jur_pers"
     if not allowed <= actual or (not is_admin and scope_column not in actual):
         raise ValueError("Таблица, описанные колонки или колонка принадлежности отсутствуют в БД")
     if not is_admin and payload.user_organization is not None and "organization" not in actual:

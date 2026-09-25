@@ -16,6 +16,7 @@ from services.chat import chat as chat_service
 from services.chat import create_chat as create_chat_service
 from services.chat import delete_chat, list_chats, attach_files, change_chat_model
 from services.user_context import trusted_chat_source
+from config import settings
 from services.chat import history as history_service
 from services.QueenModels import list_models
 
@@ -45,7 +46,7 @@ async def history(payload: HistoryRequest) -> HistoryResponse:
 @router.get("/chats", response_model=list[ChatCreateResponse])
 async def chats(
     user_login: str = Query(min_length=1, max_length=200),
-    user_jurpers: int = Query(ge=-(2**63), le=2**63 - 1),
+    user_jurpers: int | None = Query(default=None, ge=-(2**63), le=2**63 - 1),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
@@ -56,7 +57,7 @@ async def chats(
 async def remove_chat(
     conversation_id: UUID,
     user_login: str = Query(min_length=1, max_length=200),
-    user_jurpers: int = Query(ge=-(2**63), le=2**63 - 1),
+    user_jurpers: int | None = Query(default=None, ge=-(2**63), le=2**63 - 1),
 ):
     await delete_chat(conversation_id, user_login, user_jurpers)
     return Response(status_code=204)
@@ -70,3 +71,8 @@ async def attach(conversation_id: UUID, payload: AttachFilesRequest):
 @router.patch("/chat/{conversation_id}/model", response_model=ChatCreateResponse)
 async def update_model(conversation_id: UUID, payload: ChatModelRequest):
     return await change_chat_model(conversation_id, payload)
+
+
+@router.get("/models/config")
+async def model_config():
+    return {"default_model": settings.DEFAULT_MODEL}

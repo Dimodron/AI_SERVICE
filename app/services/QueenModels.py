@@ -55,14 +55,13 @@ async def list_models() -> list[str]:
 
 
 async def resolve_model(model: str | None) -> str:
+    model = model if model is not None else settings.DEFAULT_MODEL
     models = await list_models()
-    if model is not None:
-        if model not in models:
-            raise HTTPException(422, f"Модель {model} не установлена в Ollama")
-        return model
     if not models:
         raise HTTPException(503, "В Ollama нет доступных моделей")
-    return models[0]
+    if model not in models:
+        raise HTTPException(422, f"Модель {model} не установлена в Ollama")
+    return model
 
 
 class QwenStrategy:
