@@ -73,6 +73,7 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
         "WHERE n.nspname = %s AND c.relname = %s AND c.relkind IN ('r', 'p', 'v', 'm', 'f') "
         "AND a.attnum > 0 AND NOT a.attisdropped", (schema, table),
     )
+    print(cursor)
     actual = {row["attname"] for row in await cursor.fetchall()}
     if not allowed <= actual or (not is_admin and scope_column not in actual):
         raise ValueError("Таблица, описанные колонки или колонка принадлежности отсутствуют в БД")
