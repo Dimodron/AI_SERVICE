@@ -24,7 +24,7 @@ class ScenarioCreate(BaseModel):
     scenario: str = Field(min_length=1)
     visible_jurpers: list[Jurpers] = Field(default_factory=list, max_length=1000, description="Юрлица, которым доступен сценарий. Пустой список — всем.")
     is_active: StrictBool = True
-    create_user: UUID | None = Field(default=None, description="ID автора из таблицы users.")
+    create_user: str | None = Field(default=None, min_length=1, max_length=200, description="Логин автора из таблицы users.", examples=["ZVEREV"])
 
 
 class ScenarioUpdate(BaseModel):
@@ -37,7 +37,7 @@ class ScenarioUpdate(BaseModel):
     scenario: str | None = Field(default=None, min_length=1)
     visible_jurpers: list[Jurpers] | None = Field(default=None, max_length=1000)
     is_active: StrictBool | None = None
-    edit_user: UUID | None = Field(default=None, description="ID редактора из таблицы users.")
+    edit_user: str | None = Field(default=None, min_length=1, max_length=200, description="Логин редактора из таблицы users.", examples=["ZVEREV"])
 
     @model_validator(mode="after")
     def validate_changes(self):
@@ -58,7 +58,7 @@ class ScenarioResponse(BaseModel):
     scenario: str
     visible_jurpers: list[int]
     is_active: bool
-    create_user: UUID | None
-    edit_user: UUID | None
+    create_user: str | None
+    edit_user: str | None
     create_time: datetime
     edit_time: datetime

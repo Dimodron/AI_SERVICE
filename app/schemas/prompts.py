@@ -10,7 +10,7 @@ class PromptCreate(BaseModel):
     prompt: str = Field(min_length=1, description="Текст системного промпта.")
     order_num: int = Field(default=0, strict=True, ge=-(2**31), le=2**31 - 1)
     is_active: StrictBool = True
-    create_user: UUID | None = Field(default=None, description="ID автора из таблицы users.")
+    create_user: str | None = Field(default=None, min_length=1, max_length=200, description="Логин автора из таблицы users.", examples=["ZVEREV"])
 
 
 class PromptUpdate(BaseModel):
@@ -19,7 +19,7 @@ class PromptUpdate(BaseModel):
     prompt: str | None = Field(default=None, min_length=1)
     order_num: int | None = Field(default=None, strict=True, ge=-(2**31), le=2**31 - 1)
     is_active: StrictBool | None = None
-    edit_user: UUID | None = Field(default=None, description="ID редактора из таблицы users.")
+    edit_user: str | None = Field(default=None, min_length=1, max_length=200, description="Логин редактора из таблицы users.", examples=["ZVEREV"])
 
     @model_validator(mode="after")
     def validate_changes(self):
@@ -36,7 +36,7 @@ class PromptResponse(BaseModel):
     order_num: int
     prompt: str
     is_active: bool
-    create_user: UUID | None
-    edit_user: UUID | None
+    create_user: str | None
+    edit_user: str | None
     create_time: datetime
     edit_time: datetime

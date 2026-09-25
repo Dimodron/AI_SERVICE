@@ -1,13 +1,14 @@
 from uuid import UUID
 
 from database.history import connect
+from services.authors import author_id
 from fastapi import HTTPException
 from psycopg import sql
 from psycopg.errors import ForeignKeyViolation
 from psycopg.types.json import Jsonb
 from schemas.scenarios import ScenarioCreate, ScenarioUpdate
 
-_COLUMNS = "id, title, description, table_name, columns_description, scenario, visible_jurpers, is_active, create_user, edit_user, create_time, edit_time"
+_COLUMNS = "id, title, description, table_name, columns_description, scenario, visible_jurpers, is_active, (SELECT login FROM users WHERE users.id = scenarios.create_user) AS create_user, (SELECT login FROM users WHERE users.id = scenarios.edit_user) AS edit_user, create_time, edit_time"
 
 
 def _require_scenario(record):
@@ -19,11 +20,12 @@ def _require_scenario(record):
 async def create_scenario(payload: ScenarioCreate):
     try:
         async with await connect() as connection:
+            creator = await author_id(connection, payload.create_user)
             cursor = await connection.execute(
                 f"INSERT INTO scenarios (title, description, table_name, columns_description, scenario, visible_jurpers, is_active, create_user) "
                 f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
                 (payload.title, payload.description, payload.table_name, Jsonb(payload.columns_description),
-                 payload.scenario, payload.visible_jurpers, payload.is_active, payload.create_user),
+                 payload.scenario, payload.visible_jurpers, payload.is_active, creator),
             )
             return await cursor.fetchone()
     except ForeignKeyViolation as error:
@@ -62,6 +64,8 @@ async def update_scenario(scenario_id: UUID, payload: ScenarioUpdate):
     ).format(assignments)
     try:
         async with await connect() as connection:
+            if "edit_user" in changes:
+                changes["edit_user"] = await author_id(connection, changes["edit_user"])
             cursor = await connection.execute(query, (*changes.values(), scenario_id))
             return _require_scenario(await cursor.fetchone())
     except ForeignKeyViolation as error:

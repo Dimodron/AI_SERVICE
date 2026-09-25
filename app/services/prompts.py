@@ -1,12 +1,13 @@
 from uuid import UUID
 
 from database.history import connect
+from services.authors import author_id
 from fastapi import HTTPException
 from psycopg import sql
 from psycopg.errors import ForeignKeyViolation
 from schemas.prompts import PromptCreate, PromptUpdate
 
-_COLUMNS = "id, order_num, prompt, is_active, create_user, edit_user, create_time, edit_time"
+_COLUMNS = "id, order_num, prompt, is_active, (SELECT login FROM users WHERE users.id = system_prompt.create_user) AS create_user, (SELECT login FROM users WHERE users.id = system_prompt.edit_user) AS edit_user, create_time, edit_time"
 
 
 def _require_prompt(record):
@@ -18,10 +19,11 @@ def _require_prompt(record):
 async def create_prompt(payload: PromptCreate):
     try:
         async with await connect() as connection:
+            creator = await author_id(connection, payload.create_user)
             cursor = await connection.execute(
                 f"INSERT INTO system_prompt (prompt, order_num, is_active, create_user) "
                 f"VALUES (%s, %s, %s, %s) RETURNING {_COLUMNS}",
-                (payload.prompt, payload.order_num, payload.is_active, payload.create_user),
+                (payload.prompt, payload.order_num, payload.is_active, creator),
             )
             return await cursor.fetchone()
     except ForeignKeyViolation as error:
@@ -57,6 +59,8 @@ async def update_prompt(prompt_id: UUID, payload: PromptUpdate):
     ).format(assignments)
     try:
         async with await connect() as connection:
+            if "edit_user" in changes:
+                changes["edit_user"] = await author_id(connection, changes["edit_user"])
             cursor = await connection.execute(query, (*changes.values(), prompt_id))
             return _require_prompt(await cursor.fetchone())
     except ForeignKeyViolation as error:

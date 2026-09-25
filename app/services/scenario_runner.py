@@ -1,6 +1,7 @@
 from config import settings
 
 import json
+import logging
 import re
 from uuid import uuid4
 
@@ -12,6 +13,9 @@ from schemas.reports import ReportCreate, ReportResponse, ReportToolRequest
 from schemas.scenario_query import ScenarioQuery
 from services.QueenModels import QwenStrategy
 from services.reports import create_report
+
+# Inherit the API server handler so INFO diagnostics appear in docker logs.
+logger = logging.getLogger("uvicorn.error.scenario_runner")
 
 MAX_TOOL_CALLS = settings.MAX_TOOL_CALLS
 MAX_RESULT_CHARS = settings.MAX_RESULT_CHARS
@@ -153,7 +157,13 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
             "query_result_id в create_report: не переписывай строки вручную. "
             "Не выдавай неполную выборку за полный отчёт. Для текстового документа передай text. "
             "Не выдумывай данные и ссылки; используй download_url успешного create_report. "
-            "Если формат не указан, для таблицы выбери xlsx, для текстового документа — docx."
+            "Если формат не указан, для таблицы выбери xlsx, для текстового документа — docx. "
+            "Выполняй вызовы инструментов в текущем ответе, не ограничивайся обещанием "
+            "их вызвать и не жди подтверждения уже запрошенного анализа или файла. "
+            "Не подменяй задачу пользователя вопросами из предыдущих сообщений. "
+            "Смысл колонок бери из columns_description и сценария: не переименовывай "
+            "расходы в поступления и не приписывай данным отсутствующий период. "
+            "Неполные строки нельзя использовать для общих итогов или рейтинга учреждений."
         ),
     })
     # Some model templates only retain one system turn. Preserve all instructions.
@@ -168,11 +178,23 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
     files: list[ReportResponse] = []
     query_results = {}
     calls_used = 0
+    empty_retries = 0
     while True:
         reply = await strategy.chat_message(messages, tools)
         calls = reply.get("tool_calls", [])
         if not calls:
             answer = reply["content"]
+            if not answer.strip() and not files:
+                logger.warning("Empty model answer: model=%s calls_used=%s retry=%s", model, calls_used, empty_retries)
+                if empty_retries:
+                    raise HTTPException(502, "Модель вернула пустой ответ. Попробуйте повторить запрос или сменить модель.")
+                empty_retries += 1
+                messages.append({"role": "user", "content":
+                    "Предыдущая попытка не вернула ответа. Выполни исходный запрос выше: "
+                    "вызови необходимые инструменты или дай содержательный ответ. "
+                    "Если выполнить запрос невозможно, объясни причину."})
+                continue
+            logger.info("Model turn finished: model=%s tool_calls=%s reports=%s", model, calls_used, len(files))
             # Persist clickable links in message history even if the model omits them.
             for file in files:
                 if file.download_url not in answer:
@@ -224,6 +246,9 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
                 result = {"error": error.detail}
             except (DataError, ProgrammingError, QueryCanceled):
                 result = {"error": "Не удалось прочитать данные: проверь колонки, типы фильтров и агрегаты; запрос ограничен 5 секундами"}
+            logger.info("Model tool result: model=%s tool=%s status=%s rows=%s truncated=%s",
+                        model, function["name"], "error" if "error" in result else "ok",
+                        len(result["rows"]) if "rows" in result else None, result.get("truncated"))
             messages.append({
                 "role": "tool", "tool_name": function["name"],
                 "content": json.dumps(result, ensure_ascii=False, default=str),
