@@ -18,6 +18,11 @@ from services.user_context import user_context, trusted_chat_source
 @skipUnless(os.getenv('TEST_DATABASE') == '1', 'requires disposable PostgreSQL')
 class ChatWorkflowTests(IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        from config import settings
+        profile_settings = patch('services.user_context.settings', settings.model_copy(update={
+            'USER_CONTEXT_TABLE': 'oracle_data.gpt_user_context'}))
+        profile_settings.start()
+        self.addCleanup(profile_settings.stop)
         self.life = database_lifespan()
         await self.life.__aenter__()
         async with await connect() as conn:

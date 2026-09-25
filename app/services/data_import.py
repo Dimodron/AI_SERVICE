@@ -81,16 +81,23 @@ async def duplicate_tables(request: ImportRequest):
                                                  (f"{SCHEMA}.{table.lower()}",))
                         for table in request.tables:
                             cursor.arraysize = 1000
-                            # Validated identifiers; filter values always use bind parameters.
-                            where = " AND ".join(f'"{key.upper()}" = :v{i}' for i, key in enumerate(request.filters))
-                            query = f'SELECT * FROM "{owner}"."{table.upper()}"'
-                            if where:
-                                query += " WHERE " + where
-                            await cursor.execute(query, {f"v{i}": value for i, value in enumerate(request.filters.values())})
+                            # Discover exact source spelling, including quoted lowercase columns.
+                            base_query = f'SELECT * FROM "{owner}"."{table.upper()}"'
+                            await cursor.execute(base_query + " WHERE 1 = 0")
                             metadata = cursor.description
                             names = [item.name.lower() for item in metadata]
                             if any(not IDENTIFIER.fullmatch(name) for name in names) or len(set(names)) != len(names):
-                                raise HTTPException(422, f"Неподдерживаемые имена колонок в {table}")
+                                raise HTTPException(422, f"Неподдерживаемые или неоднозначные имена колонок в {table}")
+                            source_names = {item.name.lower(): item.name for item in metadata}
+                            missing = [key for key in request.filters if key.lower() not in source_names]
+                            if missing:
+                                raise HTTPException(422, f"В {table} нет колонок фильтра: {', '.join(missing)}")
+                            where = " AND ".join(
+                                f'"{source_names[key.lower()]}" = :v{i}'
+                                for i, key in enumerate(request.filters)
+                            )
+                            query = base_query + (" WHERE " + where if where else "")
+                            await cursor.execute(query, {f"v{i}": value for i, value in enumerate(request.filters.values())})
                             types = [column_type(item) for item in metadata]
                             relation = sql.Identifier(SCHEMA, table.lower())
                             existing = await (await target.execute(

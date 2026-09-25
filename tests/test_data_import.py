@@ -33,7 +33,7 @@ class OracleCursor:
         name = query.split('"')[3]
         columns, rows = self.datasets[name]
         self.description = [SimpleNamespace(name=name, type_code=kind) for name, kind in columns]
-        self.rows = list(rows)
+        self.rows = [] if query.endswith(" WHERE 1 = 0") else list(rows)
         if params:
             self.rows = [row for row in rows if all(str(row[[c[0] for c in columns].index(part.split('"')[1])]) == params[f'v{i}'] for i, part in enumerate(query.split(' WHERE ')[1].split(' AND ')))]
 
@@ -158,6 +158,23 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['raw'], b'\x00\xff')
         self.assertEqual(row['doc'], {'name': 'тест'})
         self.assertEqual(row['time'], datetime(2026, 1, 1, tzinfo=timezone.utc))
+
+    async def test_quoted_lowercase_filters_and_append(self):
+        columns = [('login', oracledb.DB_TYPE_VARCHAR), ('version', oracledb.DB_TYPE_NUMBER)]
+        await self.run_import({'DEBTS': (columns, [('ZVEREV', 1), ('OTHER', 2)])})
+        for key in ('login', 'LOGIN', 'Login'):
+            await self.run_import({'DEBTS': (columns, [('ZVEREV', 3), ('OTHER', 99)])},
+                                  filters={key: 'ZVEREV'}, mode='append')
+        self.assertEqual(await self.rows(), [{'login': 'OTHER', 'version': Decimal(2)},
+                                             {'login': 'ZVEREV', 'version': Decimal(3)}])
+
+    async def test_unknown_filter_preserves_previous_copy(self):
+        columns = [('VERSION', oracledb.DB_TYPE_NUMBER)]
+        await self.run_import({'DEBTS': (columns, [(1,)])})
+        with self.assertRaises(Exception) as failure:
+            await self.run_import({'DEBTS': (columns, [(2,)])}, filters={'login': 'ZVEREV'})
+        self.assertEqual(failure.exception.status_code, 422)
+        self.assertEqual(await self.rows(), [{'version': Decimal(1)}])
 
     async def test_batches_and_nulls(self):
         data = [(i, None if i % 2 else 'данные') for i in range(2101)]
