@@ -120,6 +120,10 @@ class QwenStrategy:
     async def _request(self, endpoint: str, payload: dict) -> dict:
         if _client is None:
             raise RuntimeError("Ollama client is not initialized: start the application lifespan")
+        generation = self.settings.model_dump(
+            include={"think", "options", "keep_alive"}, exclude_none=True,
+        )
+        generation["options"] = {"num_ctx": settings.QWEN_NUM_CTX, **generation.get("options", {})}
         response = await _client.post(
             f"/api/{endpoint}",
             json={
@@ -127,9 +131,7 @@ class QwenStrategy:
                 **payload,
                 "stream": False,
                 "keep_alive": "30m",
-                **self.settings.model_dump(
-                    include={"think", "options", "keep_alive"}, exclude_none=True,
-                ),
+                **generation,
             },
         )
         if response.status_code == 404:

@@ -20,7 +20,7 @@ class ModelOptions(BaseModel):
 
     num_ctx: int | None = Field(
         default=None, gt=0, strict=True, examples=[8192],
-        description="Размер контекста в токенах. Больший контекст требует больше RAM/VRAM. При null используются настройки Ollama.",
+        description="Размер контекста в токенах. Больший контекст требует больше RAM/VRAM. При null используется QWEN_NUM_CTX из settings.toml.",
     )
 
 
