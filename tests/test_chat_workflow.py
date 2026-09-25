@@ -84,7 +84,10 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             self.assertIn('Алиса', message['content'])
             other = payload.model_copy(update={'user_organization': 99})
             message, _ = await user_context(conn, other, trusted_source=True)
-            self.assertNotIn('Компания', message['content'])
+            data = json.loads(message['content'].split('\n', 1)[1])
+            self.assertEqual(data['profile']['organization_name'], 'Компания')
+            self.assertIsNone(data['selected_organization_name'])
+            self.assertEqual(data['selected_organization'], 99)
 
     async def test_admin_prompts_scenarios_and_business_scope(self):
         async with await connect() as conn:
@@ -201,3 +204,19 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             [{'role':'user','content':'image.png','images':['base64data']}], 'Что на фото?')
         self.assertEqual(result[-1]['images'], ['base64data'])
         self.assertIn('Что на фото?', result[-1]['content'])
+
+    async def test_profile_name_survives_different_selected_jurpers(self):
+        async with await connect() as conn:
+            await conn.execute("CREATE TABLE oracle_data.gpt_user_context (login text, jurpers bigint, jurpers_name text)")
+            await conn.execute("INSERT INTO oracle_data.gpt_user_context VALUES ('alice',1351099,'Минздрав МО')")
+            payload = ChatRequest(user_login='alice',user_jurpers=444625631,message='Какое у меня юрлицо?')
+            message, _ = await user_context(conn, payload)
+            data = json.loads(message['content'].split('\n', 1)[1])
+            self.assertEqual(data['profile']['jurpers_name'], 'Минздрав МО')
+            self.assertEqual(data['profile']['jurpers'], 1351099)
+            self.assertEqual(data['selected_jurpers'], 444625631)
+            self.assertIsNone(data['selected_jurpers_name'])
+            matching = payload.model_copy(update={'user_jurpers':1351099})
+            message, _ = await user_context(conn, matching)
+            data = json.loads(message['content'].split('\n', 1)[1])
+            self.assertEqual(data['selected_jurpers_name'], 'Минздрав МО')
