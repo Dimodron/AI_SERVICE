@@ -159,6 +159,21 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
     return result
 
 
+def is_action_promise(answer: str) -> bool:
+    """Recognize short progress-only endings, preserving questions and actual results."""
+    text = answer.strip()
+    if len(text) > 700 or "?" in text:
+        return False
+    return bool(re.search(
+        r"(?:^|[.!]\s+|\n)(?:сейчас\s+)?"
+        r"(?:суммирую|подсчитаю|посчитаю|рассчитаю|проанализирую|"
+        r"сформирую|создам|подготовлю|вызову|выполню запрос|"
+        r"приступаю к (?:анализу|расч[её]ту)|"
+        r"i(?: will|'ll) (?:calculate|analyze|analyse|query|generate|create))"
+        r"[^.!?\n:]{0,250}[.!]?$", text, re.IGNORECASE,
+    ))
+
+
 async def answer_with_scenarios(connection, model: str, payload: ChatRequest, messages: list[dict], scenarios: dict[str, dict], *, is_admin: bool = False) -> tuple[str, list[ReportResponse]]:
     strategy = QwenStrategy(model, payload)
     messages = list(messages)
@@ -175,6 +190,13 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
             "Если формат не указан, для таблицы выбери xlsx, для текстового документа — docx. "
             "Выполняй вызовы инструментов в текущем ответе, не ограничивайся обещанием "
             "их вызвать и не жди подтверждения уже запрошенного анализа или файла. "
+            "Доводи задачу до результата за один запрос: поиск, расчёт и итоговый анализ "
+            "не требуют отдельных согласований. Уточняй только недостающие данные, "
+            "без которых нельзя однозначно выбрать объект или выполнить запрос. "
+            "Если пользователь уже назвал конкретное учреждение, ограничь выборку им. "
+            "Для итогов используй агрегаты SUM и GROUP BY в query_scenario; "
+            "не выписывай длинные суммы отдельных строк в ответ. "
+            "Не создавай файл без запроса пользователя. "
             "Не подменяй задачу пользователя вопросами из предыдущих сообщений. "
             "Смысл колонок бери из columns_description и сценария: не переименовывай "
             "расходы в поступления и не приписывай данным отсутствующий период. "
@@ -194,6 +216,7 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
     query_results = {}
     calls_used = 0
     empty_retries = 0
+    progress_retries = 0
     while True:
         reply = await strategy.chat_message(messages, tools)
         calls = reply.get("tool_calls", [])
@@ -208,6 +231,19 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
                     "Предыдущая попытка не вернула ответа. Выполни исходный запрос выше: "
                     "вызови необходимые инструменты или дай содержательный ответ. "
                     "Если выполнить запрос невозможно, объясни причину."})
+                continue
+            if not files and is_action_promise(answer):
+                logger.warning("Progress-only model answer: model=%s calls_used=%s retry=%s", model, calls_used, progress_retries)
+                if progress_retries >= 2:
+                    raise HTTPException(502, "Модель несколько раз описала следующий шаг, но не завершила задачу. Попробуйте повторить запрос или сменить модель.")
+                progress_retries += 1
+                messages.append({"role": "assistant", "content": answer})
+                messages.append({"role": "user", "content":
+                    "Продолжи выполнение исходного запроса сейчас. Это внутреннее продолжение "
+                    "обработки: не запрашивай подтверждение уже порученного анализа. "
+                    "Вызови необходимые инструменты и представь готовый результат, "
+                    "а не обещание следующего шага. Не создавай не запрошенный пользователем файл. "
+                    "Если данных недостаточно, укажи конкретно, чего не хватает."})
                 continue
             logger.info("Model turn finished: model=%s tool_calls=%s reports=%s", model, calls_used, len(files))
             # Persist clickable links in message history even if the model omits them.

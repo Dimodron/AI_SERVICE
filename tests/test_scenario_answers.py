@@ -37,3 +37,36 @@ class ScenarioAnswerTests(IsolatedAsyncioTestCase):
         self.assertIn(report.download_url, answer)
         self.assertEqual(files, [report])
         self.assertEqual(reply.await_count, 2)
+
+    async def test_progress_promises_continue_without_user_confirmation(self):
+        reply = AsyncMock(side_effect=[
+            {'content':'Суммирую расходы по группам.'},
+            {'role':'assistant','content':'','tool_calls':[
+                {'function':{'name':'create_report','arguments':{'format':'xlsx','title':'Report','columns':['Total'],'rows':[[42]]}}}]},
+            {'content':'Готово: общая сумма 42.'}])
+        report = SimpleNamespace(filename='report.xlsx', download_url='/api/reports/example/download',
+                                 model_dump=lambda **kwargs: {'download_url':'/api/reports/example/download'})
+        with patch('services.scenario_runner.QwenStrategy.chat_message', reply), patch('services.scenario_runner.create_report', AsyncMock(return_value=report)):
+            answer, files = await answer_with_scenarios(None, 'test', self.payload(), [], {})
+        self.assertIn('Готово', answer)
+        self.assertNotIn('Суммирую', answer)
+        self.assertEqual(reply.await_count, 3)
+        self.assertEqual(files, [report])
+
+    async def test_repeated_promises_are_bounded(self):
+        reply = AsyncMock(return_value={'content':'Суммирую расходы по группам.'})
+        with patch('services.scenario_runner.QwenStrategy.chat_message', reply):
+            with self.assertRaises(HTTPException) as error:
+                await answer_with_scenarios(None, 'test', self.payload(), [], {})
+        self.assertEqual(error.exception.status_code, 502)
+        self.assertEqual(reply.await_count, 3)
+
+    async def test_clarification_and_real_answers_are_not_retried(self):
+        for text in ['Какой период нужно проанализировать?', 'Итого: 42 млн руб.',
+                     'Суммирую результаты: расходы составляют 42 млн руб.',
+                     'Не найдено данных для указанного учреждения.']:
+            reply = AsyncMock(return_value={'content':text})
+            with patch('services.scenario_runner.QwenStrategy.chat_message', reply):
+                answer, _ = await answer_with_scenarios(None, 'test', self.payload(), [], {})
+            self.assertEqual(answer, text)
+            self.assertEqual(reply.await_count, 1)
