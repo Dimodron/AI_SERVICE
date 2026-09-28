@@ -446,3 +446,52 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
                 self.assertEqual((await client.get('/api/models/config',headers=denied)).status_code,200)
             with patch.dict(os.environ,{'CHAT_API_TOKEN':''}):
                 self.assertEqual((await client.get('/api/scenarios',headers=headers)).status_code,403)
+
+    async def test_scenario_catalog_is_admin_only_and_returns_structure(self):
+        import httpx
+        from fastapi import FastAPI
+        from routers.scenario_router import router
+        async with await connect() as conn:
+            await conn.execute('CREATE TABLE oracle_data.catalog_example (id bigint NOT NULL, amount numeric(12,2), obsolete text)')
+            await conn.execute('ALTER TABLE oracle_data.catalog_example DROP COLUMN obsolete')
+            await conn.execute("COMMENT ON TABLE oracle_data.catalog_example IS 'Report data'")
+            await conn.execute("COMMENT ON COLUMN oracle_data.catalog_example.amount IS 'Amount in rubles'")
+            await conn.execute('CREATE VIEW oracle_data.catalog_view AS SELECT id FROM oracle_data.catalog_example')
+        app=FastAPI(); app.include_router(router)
+        headers={'X-Chat-Token':'secret','X-User-Login':'alice','X-User-Admin':'1'}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+            with patch.dict(os.environ,{'CHAT_API_TOKEN':'secret'}):
+                path='/api/scenarios/catalog/'
+                for endpoint in ('schemas','tables?schema=public','columns?schema=public&table=users'):
+                    self.assertEqual((await client.get(path+endpoint)).status_code,403)
+                    self.assertEqual((await client.get(path+endpoint,headers={**headers,'X-User-Admin':'0'})).status_code,403)
+                self.assertEqual((await client.get(path+'schemas?include_system=true',headers={**headers,'X-User-Admin':'0'})).status_code,403)
+                ordinary=await client.get(path+'schemas',headers=headers)
+                self.assertNotIn('public',ordinary.json())
+                expanded=await client.get(path+'schemas?include_system=true',headers=headers)
+                self.assertIn('public',expanded.json())
+                self.assertNotIn('pg_catalog',expanded.json())
+                hidden=await client.get(path+'tables?schema=public',headers=headers)
+                self.assertEqual(hidden.json(),[])
+                shown=await client.get(path+'tables?schema=public&include_system=true',headers=headers)
+                self.assertIn('users',[row['name'] for row in shown.json()])
+                self.assertEqual((await client.get(path+'columns?schema=public&table=users',headers=headers)).status_code,404)
+                self.assertEqual((await client.get(path+'columns?schema=public&table=users&include_system=true',headers=headers)).status_code,200)
+                response=await client.get(path+'schemas',headers=headers)
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertIn('oracle_data',response.json())
+                self.assertNotIn('pg_catalog',response.json())
+                self.assertNotIn('information_schema',response.json())
+                response=await client.get(path+'tables',params={'schema':'oracle_data'},headers=headers)
+                self.assertEqual(response.json(),[{'name':'catalog_example','description':'Report data'}])
+                response=await client.get(path+'columns',params={'schema':'oracle_data','table':'catalog_example'},headers=headers)
+                data=response.json()
+                self.assertEqual(data['description'],'Report data')
+                self.assertEqual([c['name'] for c in data['columns']],['id','amount'])
+                self.assertFalse(data['columns'][0]['nullable'])
+                self.assertTrue(data['columns'][1]['nullable'])
+                self.assertEqual(data['columns'][1]['data_type'],'numeric(12,2)')
+                self.assertEqual(data['columns'][1]['description'],'Amount in rubles')
+                for schema,table in [('pg_catalog','pg_authid'),('public','missing'),('oracle_data','catalog_view')]:
+                    self.assertEqual((await client.get(path+'columns',params={'schema':schema,'table':table},headers=headers)).status_code,404)
+                self.assertEqual((await client.get(path+'tables',params={'schema':"public'; DROP TABLE users;--"},headers=headers)).status_code,422)

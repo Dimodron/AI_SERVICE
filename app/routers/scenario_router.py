@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Response
 from schemas.scenarios import ScenarioCreate, ScenarioResponse, ScenarioUpdate
 from services.oracle_identity import require_admin
-from services import scenarios
+from services import scenarios, scenario_catalog
 
 router = APIRouter(prefix="/api/scenarios", tags=["Scenarios"], dependencies=[Depends(require_admin)])
 
@@ -23,6 +23,26 @@ async def list_all(
     offset: int = Query(default=0, ge=0),
 ):
     return await scenarios.list_scenarios(is_active, limit, offset, user_jurpers, group, is_admin)
+
+
+@router.get("/catalog/schemas", response_model=list[str])
+async def catalog_schemas(include_system: bool = False, actor = Depends(require_admin)):
+    return await scenario_catalog.schemas(include_system and actor.is_admin)
+
+
+@router.get("/catalog/tables")
+async def catalog_tables(schema: str = Query(min_length=1, max_length=63, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"), include_system: bool = False, actor = Depends(require_admin)):
+    return await scenario_catalog.tables(schema, include_system and actor.is_admin)
+
+
+@router.get("/catalog/columns")
+async def catalog_columns(
+    schema: str = Query(min_length=1, max_length=63, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"),
+    table: str = Query(min_length=1, max_length=63, pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$"),
+    include_system: bool = False,
+    actor = Depends(require_admin),
+):
+    return await scenario_catalog.columns(schema, table, include_system and actor.is_admin)
 
 
 @router.get("/{scenario_id}", response_model=ScenarioResponse)

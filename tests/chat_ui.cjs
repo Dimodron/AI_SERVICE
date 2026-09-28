@@ -4,7 +4,8 @@ const jquery = require('jquery');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const script = fs.readFileSync(path.join(__dirname, '../oracle_serv/chat.js'), 'utf8');
+const modules = ['common','chat','prompts','scenarios'];
+const scripts = Object.fromEntries(modules.map(name => [name, fs.readFileSync(path.join(process.env.CHAT_UI_DIR || path.join(__dirname, '../oracle_serv'), name + '.js'), 'utf8')]));
 const cid = '11111111-1111-4111-8111-111111111111';
 const fid = '22222222-2222-4222-8222-222222222222';
 const file = {file_id: fid, filename: 'debt.txt', size_bytes: 4};
@@ -36,6 +37,12 @@ async function fixture(admin = true) {
             }
             setTimeout(() => {
                 if (name === 'GPTConfig') return options.success({max_files:5,max_file_bytes:5242880,extensions:['.txt'],default_model:'test',can_select_model:admin,models:admin?['test','second']:[]});
+                if (name === 'GPTScenarioCatalog') {
+                    if (fail) return options.success({status:'error',message:'catalog offline'});
+                    if (data.x01==='schemas') return options.success(data.x04==='1' ? ['oracle_data','public'] : ['oracle_data']);
+                    if (data.x01==='tables') return options.success([{name:'messages'},{name:'conversations'}]);
+                    if (data.x01==='columns') return options.success({table_name:data.x02+'.'+data.x03,description:'Table comment',columns:[{name:'id',data_type:'uuid',nullable:false,description:'Identifier'},{name:'content',data_type:'text',nullable:true,description:'Text'}]});
+                }
                 if (name === 'GPTAdminList') return options.success(adminRows[data.x01]);
                 if (name === 'GPTAdminSave') {
                     if (fail) return options.success({status:'error',message:'save failed'});
@@ -64,7 +71,9 @@ async function fixture(admin = true) {
             }, 0);
         }
     }};
-    win.eval(script);
+    for (const name of modules) {
+        if (admin || !['prompts','scenarios'].includes(name)) win.eval(scripts[name]);
+    }
     await until(() => $('#chatStatus').text() === 'Аналитик готов к работе' && !$('#sendBtn').prop('disabled'));
     async function pick(kind) {
         const local = new win.File(['test'], 'debt.txt', {type:'text/plain'});
@@ -196,17 +205,51 @@ async function fixture(admin = true) {
     m('#gpt-scenarios-edit [data-field="scenario"]').val('Read messages');
     m('#gpt-scenarios-edit [data-field="groups"]').val('Admin, Analytics');
     m('#gpt-scenarios-edit [data-field="is_admin"]').prop('checked',true);
-    for(const table of ['public.messages','public.conversations']) {
+    for(const table of ['messages','conversations']) {
         m('[data-admin-add-table]').trigger('click');
         const row=m('.gpt-admin-table').last();
-        row.find('[data-table-field="table_name"]').val(table);
+        await until(()=>row.find('[data-table-field="schema"] option').length>1);
+        row.find('[data-table-field="schema"]').val('public').trigger('change');
+        await until(()=>row.find('[data-table-field="table"] option').length>1);
+        row.find('[data-table-field="table"]').val(table).trigger('change');
+        await until(()=>row.find('.gpt-column-row').length===2);
+        assert.match(row.text(),/uuid/);
         row.find('[data-table-field="description"]').val('Description');
-        row.find('[data-table-field="columns_description"]').val('{"id":"Identifier"}');
+        row.find('.gpt-column-description').first().val('My identifier');
+        row.find('.gpt-column-use').last().prop('checked',false);
     }
     m('[data-admin-save="scenarios"]').trigger('click');
     await until(()=>m('#gpt-scenarios-list .gpt-admin-row').length===1 && !m('[data-admin-new="scenarios"]').prop('disabled'));
     saved=JSON.parse(management.calls.filter(c=>c.name==='GPTAdminSave').at(-1).data.f01.join(''));
     assert.equal(saved.tables.length,2);
+    assert.deepEqual(saved.tables[0].columns_description,{id:'My identifier'});
+    m('#gpt-scenarios-list .gpt-admin-row button').trigger('click');
+    await until(()=>m('#gpt-scenarios-edit .gpt-column-row').length===4);
+    assert.equal(m('.gpt-column-description').first().val(),'My identifier','saved description survives metadata fetch');
+    assert.equal(m('.gpt-column-use').eq(1).prop('checked'),false,'unselected columns stay unselected');
+    m('#gpt-scenarios-edit [data-field="is_admin"]').prop('checked',false).trigger('change');
+    await until(()=>m('.gpt-table-status').first().text().includes('недоступна'));
+    assert.equal(m('[data-table-field="schema"] option[value="public"]').length,0);
+    assert.equal(m('.gpt-column-row').length,0);
+    const modeSaves=management.calls.filter(c=>c.name==='GPTAdminSave').length;
+    m('[data-admin-save="scenarios"]').trigger('click');
+    assert.equal(management.calls.filter(c=>c.name==='GPTAdminSave').length,modeSaves);
+    m('#gpt-scenarios-edit [data-field="is_admin"]').prop('checked',true).trigger('change');
+    await until(()=>m('.gpt-column-row').length===4);
+    assert.equal(m('.gpt-column-description').first().val(),'My identifier');
+    assert.equal(m('.gpt-column-use').eq(1).prop('checked'),false);
+    assert.ok(management.calls.some(c=>c.name==='GPTScenarioCatalog' && c.data.x04==='0'));
+    management.setFailure(true);
+    m('.gpt-admin-table button').filter(function(){return m(this).text()==='Обновить структуру';}).first().trigger('click');
+    await until(()=>m('.gpt-table-status').first().text()==='catalog offline');
+    const beforeSaves=management.calls.filter(c=>c.name==='GPTAdminSave').length;
+    m('[data-admin-save="scenarios"]').trigger('click');
+    assert.equal(management.calls.filter(c=>c.name==='GPTAdminSave').length,beforeSaves,'do not save incomplete metadata');
+    management.setFailure(false);
+    m('.gpt-admin-table button').filter(function(){return m(this).text()==='Обновить структуру';}).first().trigger('click');
+    await until(()=>m('.gpt-column-row').length===4);
+    assert.equal(m('.gpt-column-description').first().val(),'My identifier');
+
     assert.equal(saved.is_admin,true);
     assert.deepEqual(saved.groups,['Admin','Analytics']);
     management.dom.window.close();
