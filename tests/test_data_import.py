@@ -69,6 +69,25 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await client.post('/api/dublicate?' + query, headers={'X-Import-Token': 'test'})).status_code, 422)
 
 
+    async def test_apex_combines_version_and_custom_filter(self):
+        from unittest.mock import AsyncMock
+        app = FastAPI()
+        app.include_router(router)
+        result = {'mode': 'append', 'tables': [{'table': 'oracle_data.debts', 'rows': 2}]}
+        mocked = AsyncMock(return_value=result)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            with patch.dict(os.environ, {'DATA_IMPORT_TOKEN': 'test'}), patch('routers.data_import_router.duplicate_tables', mocked):
+                response = await client.post('/api/dublicate', params={
+                    'table': 'DEBTS', 'filter': 'version,jur_pers',
+                    'values': '570534214,1351099', 'mode': 'append'
+                }, headers={'X-Import-Token': 'test'})
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), result)
+        request = mocked.call_args.args[0]
+        self.assertEqual(request.filters, {'version': '570534214', 'jur_pers': '1351099'})
+        self.assertEqual(request.mode, 'append')
+
+
 @unittest.skipUnless(os.getenv('TEST_DATABASE') == '1', 'requires disposable PostgreSQL')
 class ImportTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):

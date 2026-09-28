@@ -4,7 +4,7 @@ const jquery = require('jquery');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const modules = ['common','chat','prompts','scenarios'];
+const modules = ['common','chat','prompts','scenarios','import'];
 const scripts = Object.fromEntries(modules.map(name => [name, fs.readFileSync(path.join(process.env.CHAT_UI_DIR || path.join(__dirname, '../oracle_serv'), name + '.js'), 'utf8')]));
 const cid = '11111111-1111-4111-8111-111111111111';
 const fid = '22222222-2222-4222-8222-222222222222';
@@ -18,8 +18,8 @@ async function fixture(admin = true) {
     const dom = new JSDOM(`<main id="chat_body"><div class="head-actions"></div><div class="chathead"></div><div id="chatStatus"></div><div id="chatTitle"></div><div id="chatMessages"></div><div id="chatList"></div><input id="chatSearch"><button id="newChatBtn"><span class="new-chat-plus"></span></button><div class="composer"><div id="selectedFiles"></div><textarea id="prompt"></textarea><button id="attachBtn"></button><button id="sendBtn"></button></div><input type="file" id="P237_GPT_FILES"><div class="hint"></div></main>`, {runScripts:'outside-only', url:'http://example.test'});
     const win = dom.window, $ = jquery(win);
     if (admin) {
-        $("body").append('<div id="gptAdminControls"><button id="gptAdminGear"></button><div id="gptAdminMenu" style="display:none"><button data-admin-list="prompts">Prompts</button><button data-admin-list="scenarios">Scenarios</button></div></div>');
-        for (const name of ['prompts_list','prompts_edit','scenarios_list','scenarios_edit']) $("body").append(fs.readFileSync(path.join(__dirname,'../oracle_serv/admin_regions/'+name+'.html'),'utf8'));
+        $("body").append('<div id="gptAdminControls"><button id="gptAdminGear"></button><div id="gptAdminMenu" style="display:none"><button data-admin-list="prompts">Prompts</button><button data-admin-list="scenarios">Scenarios</button><button data-admin-import>Import</button></div></div>');
+        for (const name of ['prompts_list','prompts_edit','scenarios_list','scenarios_edit','export_list']) $("body").append(fs.readFileSync(path.join(__dirname,'../oracle_serv/admin_regions/'+name+'.html'),'utf8'));
     }
     const adminRows = {prompts:[], scenarios:[]};
     let active = '', fail = false, stored = false, model = 'test';
@@ -43,6 +43,8 @@ async function fixture(admin = true) {
                     if (data.x01==='tables') return options.success([{name:'messages'},{name:'conversations'}]);
                     if (data.x01==='columns') return options.success({table_name:data.x02+'.'+data.x03,description:'Table comment',columns:[{name:'id',data_type:'uuid',nullable:false,description:'Identifier'},{name:'content',data_type:'text',nullable:true,description:'Text'}]});
                 }
+                if (name === 'GPTImportTables') return options.success({items:[{display_value:'ZV_DATA',return_value:'ZV_DATA'}],has_more:false});
+                if (name === 'GPTImportRun') return options.success(fail ? {status:'error',message:'import failed'} : {tables:[{table:'oracle_data.zv_data',rows:42}]});
                 if (name === 'GPTAdminList') return options.success(adminRows[data.x01]);
                 if (name === 'GPTAdminSave') {
                     if (fail) return options.success({status:'error',message:'save failed'});
@@ -72,7 +74,7 @@ async function fixture(admin = true) {
         }
     }};
     for (const name of modules) {
-        if (admin || !['prompts','scenarios'].includes(name)) win.eval(scripts[name]);
+        if (admin || !['prompts','scenarios','import'].includes(name)) win.eval(scripts[name]);
     }
     await until(() => $('#chatStatus').text() === 'Аналитик готов к работе' && !$('#sendBtn').prop('disabled'));
     async function pick(kind) {
@@ -252,6 +254,42 @@ async function fixture(admin = true) {
 
     assert.equal(saved.is_admin,true);
     assert.deepEqual(saved.groups,['Admin','Analytics']);
+    m('[data-admin-import]').trigger('click');
+    await until(()=>m('#gpt-import-table option').length===1);
+    assert.notEqual(m('#gpt-import-list').css('display'),'none');
+    m('#gpt-import-table').val('ZV_DATA');
+    m('#gpt-import-version').val('570534214');
+    m('#gpt-import-field').val('jur_pers');
+    m('#gpt-import-value').val('1351099');
+    m('#gpt-import-mode').val('append');
+    m('#gpt-import-run').trigger('click');
+    m('#gpt-import-run').trigger('click');
+    await until(()=>m('#gpt-import-result').text().includes('42'));
+    let imports=management.calls.filter(c=>c.name==='GPTImportRun');
+    assert.equal(imports.length,1,'prevent duplicate import submission');
+    assert.equal(imports[0].data.x02,'570534214');
+    assert.equal(imports[0].data.x03,'jur_pers');
+    assert.equal(imports[0].data.x04,'1351099');
+    assert.equal(imports[0].data.x05,'append');
+    m('#gpt-import-field').val('VERSION');
+    m('#gpt-import-run').trigger('click');
+    assert.match(m('#gpt-import-result').text(),/дважды/);
+    assert.equal(management.calls.filter(c=>c.name==='GPTImportRun').length,1);
+    m('#gpt-import-field').val('jur_pers');
+    management.setFailure(true);
+    m('#gpt-import-run').trigger('click');
+    await until(()=>m('#gpt-import-result').text()==='import failed');
+    assert.equal(m('#gpt-import-table').val(),'ZV_DATA');
+    assert.equal(m('#gpt-import-version').val(),'570534214');
+    assert.equal(m('#gpt-import-run').prop('disabled'),false);
+    management.setFailure(false);
+    m('#gpt-import-version').val('');
+    m('#gpt-import-field').val('');
+    m('#gpt-import-value').val('');
+    m('#gpt-import-run').trigger('click');
+    await until(()=>m('#gpt-import-result').text().includes('42'));
+    m('#gpt-import-list [data-admin-close]').trigger('click');
+    assert.equal(m('#prompt').val(),'Chat draft');
     management.dom.window.close();
     const restricted=await fixture(false);
     assert.equal(restricted.$('#gptAdminGear').length,0);
