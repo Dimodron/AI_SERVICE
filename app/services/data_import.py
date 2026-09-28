@@ -3,6 +3,8 @@ from config import settings
 import asyncio
 import logging
 from decimal import Decimal
+from datetime import datetime, timezone
+from services import import_history
 from os import environ
 
 import oracledb
@@ -46,6 +48,22 @@ def output_type_handler(cursor, metadata):
 
 
 async def duplicate_tables(request: ImportRequest):
+    started_at = datetime.now(timezone.utc)
+    try:
+        return await _duplicate_tables(request, started_at)
+    except Exception as exc:
+        # Failed transactions have already rolled back. Never mask the original error
+        # if PostgreSQL itself is unavailable and cannot store the failed attempt.
+        detail = str(exc.detail) if isinstance(exc, HTTPException) else "Ошибка переноса; подробности в журнале API"
+        try:
+            async with await connect() as conn:
+                await import_history.record(conn, request, started_at, error=detail[:1000])
+        except Exception:
+            logger.exception("Could not persist failed import history")
+        raise
+
+
+async def _duplicate_tables(request: ImportRequest, started_at):
     required = ("ORACLE_HOST", "ORACLE_USER", "ORACLE_PASS", "ORACLE_NAME")
     if any(not environ.get(key) for key in required):
         raise HTTPException(503, "Не настроено подключение к Oracle")
@@ -132,6 +150,8 @@ async def duplicate_tables(request: ImportRequest):
                                         count += len(rows)
                             results.append({"table": f"{SCHEMA}.{table.lower()}", "rows": count,
                                             "columns": dict(zip(names, types))})
+                        # History and imported rows commit together.
+                        await import_history.record(target, request, started_at, results=results)
         return {"mode": request.mode, "tables": results}
     except TimeoutError:
         raise HTTPException(504, "Истекло время импорта; изменения отменены") from None

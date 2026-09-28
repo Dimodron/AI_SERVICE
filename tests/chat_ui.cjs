@@ -43,6 +43,10 @@ async function fixture(admin = true) {
                     if (data.x01==='tables') return options.success([{name:'messages'},{name:'conversations'}]);
                     if (data.x01==='columns') return options.success({table_name:data.x02+'.'+data.x03,description:'Table comment',columns:[{name:'id',data_type:'uuid',nullable:false,description:'Identifier'},{name:'content',data_type:'text',nullable:true,description:'Text'}]});
                 }
+                if (name === 'GPTImportHistory') return options.success({
+                    items:[{table_name:'oracle_data.zv_data',finished_at:'2026-09-28T10:00:00Z',filters:{version:'570534214'},mode:'replace',status:'success',row_count:42}],
+                    last_success_at:'2026-09-28T10:00:00Z',has_more:false
+                });
                 if (name === 'GPTImportTables') return options.success({items:[{display_value:'ZV_DATA',return_value:'ZV_DATA'}],has_more:false});
                 if (name === 'GPTImportRun') return options.success(fail ? {status:'error',message:'import failed'} : {tables:[{table:'oracle_data.zv_data',rows:42}]});
                 if (name === 'GPTAdminList') return options.success(adminRows[data.x01]);
@@ -257,7 +261,10 @@ async function fixture(admin = true) {
     m('[data-admin-import]').trigger('click');
     await until(()=>m('#gpt-import-table option').length===1);
     assert.notEqual(m('#gpt-import-list').css('display'),'none');
-    m('#gpt-import-table').val('ZV_DATA');
+    m('#gpt-import-table').val('ZV_DATA').trigger('change');
+    await until(()=>m('#gpt-import-history tr').length===1);
+    assert.match(m('#gpt-import-history').text(),/570534214/);
+    assert.match(m('#gpt-import-last-success').text(),/Последний успешный перенос/);
     m('#gpt-import-version').val('570534214');
     m('#gpt-import-field').val('jur_pers');
     m('#gpt-import-value').val('1351099');
@@ -267,6 +274,7 @@ async function fixture(admin = true) {
     await until(()=>m('#gpt-import-result').text().includes('42'));
     let imports=management.calls.filter(c=>c.name==='GPTImportRun');
     assert.equal(imports.length,1,'prevent duplicate import submission');
+    assert.ok(management.calls.some(c=>c.name==='GPTImportHistory' && c.data.x01==='ZV_DATA'));
     assert.equal(imports[0].data.x02,'570534214');
     assert.equal(imports[0].data.x03,'jur_pers');
     assert.equal(imports[0].data.x04,'1351099');

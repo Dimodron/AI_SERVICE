@@ -1,6 +1,7 @@
 """Run with TEST_DATABASE=1 against a disposable PostgreSQL database."""
 import os
 import unittest
+from pathlib import Path
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -95,6 +96,8 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         await self.lifespan.__aenter__()
         async with await connect() as connection:
             await connection.execute('DROP SCHEMA IF EXISTS oracle_data CASCADE')
+            await connection.execute((Path(__file__).resolve().parents[1] / 'database/import_history.sql').read_text())
+            await connection.execute('TRUNCATE public.data_import_history')
         self.environment = patch.dict(os.environ, {'ORACLE_HOST': 'test', 'ORACLE_USER': 'reader', 'ORACLE_PASS': 'test', 'ORACLE_NAME': 'test'})
         self.environment.start()
 
@@ -106,6 +109,42 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         cursor = OracleCursor(datasets)
         with patch('services.data_import.oracledb.connect_async', return_value=OracleConnection(cursor)):
             return await duplicate_tables(ImportRequest(tables=list(datasets), **options))
+
+    async def test_history_tracks_commits_failures_and_filtered_refresh(self):
+        from services.import_history import history
+        async with await connect() as conn:
+            await conn.execute('TRUNCATE public.data_import_history')
+        columns = [('VERSION', oracledb.DB_TYPE_NUMBER)]
+        await self.run_import({'DEBTS': (columns, [(1,)])})
+        initial = await history('DEBTS')
+        self.assertEqual(initial['items'][0]['row_count'], 1)
+        self.assertEqual(initial['items'][0]['status'], 'success')
+        last_success = initial['last_success_at']
+        with self.assertRaises(Exception):
+            await self.run_import({'DEBTS': (columns, [(2,)]), 'BAD': ([('BROKEN', object())], [])})
+        failed = await history('DEBTS')
+        self.assertEqual(failed['last_success_at'], last_success)
+        self.assertEqual(failed['items'][0]['status'], 'error')
+        self.assertIsNone(failed['items'][0]['row_count'])
+        self.assertEqual(await self.rows(), [{'version': Decimal(1)}])
+        await self.run_import({'DEBTS': (columns, [])}, filters={'VERSION': '2'}, mode='append')
+        refreshed = await history('debts', limit=1)
+        self.assertTrue(refreshed['has_more'])
+        self.assertEqual(refreshed['items'][0]['row_count'], 0)
+        self.assertEqual(refreshed['items'][0]['filters'], {'VERSION': '2'})
+        self.assertEqual(refreshed['items'][0]['mode'], 'append')
+        self.assertGreater(refreshed['last_success_at'], last_success)
+        second = await history('DEBTS', limit=1, offset=1)
+        self.assertEqual(second['items'][0]['status'], 'error')
+        app = FastAPI()
+        app.include_router(router)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://test') as client:
+            with patch.dict(os.environ, {'DATA_IMPORT_TOKEN': 'test'}):
+                self.assertEqual((await client.get('/api/dublicate/history')).status_code, 403)
+                response = await client.get('/api/dublicate/history?table=DEBTS', headers={'X-Import-Token':'test'})
+                self.assertEqual(response.status_code, 200)
+                self.assertIsInstance(response.json()['last_success_at'], str)
+                self.assertEqual(len(response.json()['items']), 3)
 
     async def rows(self):
         async with await connect() as connection:

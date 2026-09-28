@@ -20,7 +20,7 @@ logger = logging.getLogger("uvicorn.error.scenario_runner")
 MAX_TOOL_CALLS = settings.MAX_TOOL_CALLS
 MAX_RESULT_CHARS = settings.MAX_RESULT_CHARS
 _IDENTIFIER = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
-_INTERNAL_TABLES = {"users", "conversations", "messages", "files", "conversation_files", "message_files", "scenarios", "system_prompt"}
+_INTERNAL_TABLES = {"users", "conversations", "messages", "files", "conversation_files", "message_files", "scenarios", "system_prompt", "data_import_history"}
 _OPERATORS = {"eq": "=", "ne": "<>", "gt": ">", "gte": ">=", "lt": "<", "lte": "<=", "like": "LIKE"}
 QUERY_TOOL = {
     "type": "function",
