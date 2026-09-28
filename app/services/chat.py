@@ -57,11 +57,11 @@ def model_messages(system_messages, history, context, question):
     return [*leading, *history, current]
 
 
-async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
+async def chat(payload: ChatRequest, *, trusted_source=False, oracle_admin=None) -> ChatResponse:
     if not payload.save_history:
         model = await resolve_model(payload.model)
         async with await connect() as connection:
-            profile, is_admin = await user_context(connection, payload, trusted_source)
+            profile, is_admin = await user_context(connection, payload, trusted_source, oracle_admin=oracle_admin)
             system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers, is_admin=is_admin)
             system_messages.append(profile)
             context = await file_context(connection, payload.file_ids)
@@ -93,7 +93,7 @@ async def chat(payload: ChatRequest, *, trusted_source=False) -> ChatResponse:
 
         history = list(reversed(await cursor.fetchall()))
         context = await file_context(connection, payload.file_ids, conversation_id)
-        profile, is_admin = await user_context(connection, payload, trusted_source)
+        profile, is_admin = await user_context(connection, payload, trusted_source, oracle_admin=oracle_admin)
         system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers, is_admin=is_admin)
         system_messages.append(profile)
         answer, files = await answer_with_scenarios(

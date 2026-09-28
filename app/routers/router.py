@@ -16,11 +16,12 @@ from services.chat import chat as chat_service
 from services.chat import create_chat as create_chat_service
 from services.chat import delete_chat, list_chats, attach_files, change_chat_model
 from services.user_context import trusted_chat_source
+from services.oracle_identity import oracle_identity
 from config import settings
 from services.chat import history as history_service
 from services.QueenModels import list_models
 
-router = APIRouter(prefix="/api", tags=["Qwen"], dependencies=[Depends(trusted_chat_source)])
+router = APIRouter(prefix="/api", tags=["Qwen"], dependencies=[Depends(trusted_chat_source), Depends(oracle_identity)])
 
 
 @router.get("/models", response_model=list[str])
@@ -34,8 +35,8 @@ async def create_chat(payload: ChatCreateRequest):
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(payload: ChatRequest, trusted_source: bool = Depends(trusted_chat_source)):
-    return await chat_service(payload, trusted_source=trusted_source)
+async def chat(payload: ChatRequest, trusted_source: bool = Depends(trusted_chat_source), actor = Depends(oracle_identity)):
+    return await chat_service(payload, trusted_source=trusted_source, oracle_admin=actor.is_admin if actor else None)
 
 
 @router.post("/chat/history", response_model=HistoryResponse)

@@ -9,10 +9,10 @@ async def load_chat_context(connection, user_jurpers: int, *, is_admin: bool = F
     )
     messages = [{"role": "system", "content": row["prompt"]} for row in await cursor.fetchall()]
     cursor = await connection.execute(
-        "SELECT id, title, description, table_name, columns_description, scenario, visible_jurpers "
-        "FROM scenarios WHERE is_active "
+        "SELECT id, title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin "
+        "FROM scenarios WHERE is_active AND (NOT is_admin OR %s) "
         "AND (%s OR cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
-        "ORDER BY create_time, id", (is_admin, user_jurpers),
+        "ORDER BY create_time, id", (is_admin, is_admin, user_jurpers),
     )
     scenarios = {str(row["id"]): row for row in await cursor.fetchall()}
     if is_admin:
@@ -30,6 +30,10 @@ async def load_chat_context(connection, user_jurpers: int, *, is_admin: bool = F
                 "Ниже справочник активных сценариев. Выбери подходящий к вопросу и следуй его "
                 "алгоритму анализа. Для фактов из БД вызывай query_scenario, затем анализируй "
                 "полученные строки и формируй конечный ответ. Можно выполнить несколько запросов. "
+                "Если tables непустой, используй только таблицы из него, выбирая table_name "
+                "при каждом вызове query_scenario. Описание и колонки бери у выбранной таблицы. "
+                "При пустом tables используется старый table_name и columns_description. "
+                "Для нескольких таблиц выполняй отдельные запросы; связи сверяй по описаниям, не придумывай их. "
                 + ("Фиксированного ограничения по jurpers/organization для администратора нет. " if is_admin else
                  "Сервер ограничивает запрос по jurpers пользователя и выбранной organization. Эти ограничения нельзя обходить. ")
                 +

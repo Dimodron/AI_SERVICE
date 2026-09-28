@@ -23,6 +23,7 @@ class ScenarioQuery(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     scenario_id: UUID
+    table_name: str | None = Field(default=None, min_length=1, description="Имя таблицы из tables сценария. Обязательно, если таблиц несколько.")
     columns: list[str] = Field(default_factory=list, max_length=30)
     filters: list[QueryFilter] = Field(default_factory=list, max_length=20)
     aggregates: list[QueryAggregate] = Field(default_factory=list, max_length=10)

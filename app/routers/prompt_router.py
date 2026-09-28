@@ -1,15 +1,16 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Depends, Query, Response
 from schemas.prompts import PromptCreate, PromptResponse, PromptUpdate
+from services.oracle_identity import require_admin
 from services import prompts
 
-router = APIRouter(prefix="/api/system_prompt", tags=["System prompts"])
+router = APIRouter(prefix="/api/system_prompt", tags=["System prompts"], dependencies=[Depends(require_admin)])
 
 
 @router.post("", response_model=PromptResponse, status_code=201)
-async def create(payload: PromptCreate):
-    return await prompts.create_prompt(payload)
+async def create(payload: PromptCreate, actor = Depends(require_admin)):
+    return await prompts.create_prompt(payload.model_copy(update={"create_user": actor.login}))
 
 
 @router.get("", response_model=list[PromptResponse])
@@ -27,8 +28,8 @@ async def get(prompt_id: UUID):
 
 
 @router.patch("/{prompt_id}", response_model=PromptResponse)
-async def update(prompt_id: UUID, payload: PromptUpdate):
-    return await prompts.update_prompt(prompt_id, payload)
+async def update(prompt_id: UUID, payload: PromptUpdate, actor = Depends(require_admin)):
+    return await prompts.update_prompt(prompt_id, payload.model_copy(update={"edit_user": actor.login}))
 
 
 @router.delete("/{prompt_id}", status_code=204, response_class=Response)

@@ -41,26 +41,41 @@ REPORT_TOOL = {
 }
 
 
-def _table_parts(name: str) -> tuple[str, str]:
+def _table_parts(name: str, *, allow_internal: bool = False) -> tuple[str, str]:
     parts = name.split(".")
     if len(parts) == 1:
         parts.insert(0, "public")
     if len(parts) != 2 or not all(_IDENTIFIER.fullmatch(part) for part in parts):
         raise ValueError("Некорректное table_name в сценарии")
     schema, table = parts
-    if schema.startswith("pg_") or schema == "information_schema" or table in _INTERNAL_TABLES:
+    if schema.startswith("pg_") or schema == "information_schema" or (table in _INTERNAL_TABLES and not allow_internal):
         raise ValueError("Служебные таблицы недоступны для сценариев")
     return schema, table
 
 
 async def query_scenario(connection, scenario: dict, query: ScenarioQuery, payload: ChatRequest, *, is_admin: bool = False) -> dict:
+    if scenario.get("is_admin", False) and not is_admin:
+        raise ValueError("Сценарий доступен только администратору")
     # Ownership predicates are fixed by the application, never by the model.
     if not is_admin and scenario["visible_jurpers"] and payload.user_jurpers not in scenario["visible_jurpers"]:
         raise ValueError("Сценарий недоступен этому юрлицу")
-    if not scenario["table_name"]:
-        raise ValueError("У сценария не указана таблица")
-    schema, table = _table_parts(scenario["table_name"])
-    allowed = set(scenario["columns_description"])
+    sources = scenario.get("tables") or ([{
+        "table_name": scenario["table_name"], "columns_description": scenario["columns_description"]
+    }] if scenario.get("table_name") else [])
+    if not sources:
+        raise ValueError("У сценария не указаны таблицы")
+    def canonical(name):
+        return name if "." in name else "public." + name
+    if query.table_name is None:
+        if len(sources) != 1:
+            raise ValueError("Укажи table_name из списка tables сценария")
+        source = sources[0]
+    else:
+        source = next((item for item in sources if canonical(item["table_name"]) == canonical(query.table_name)), None)
+        if source is None:
+            raise ValueError("Таблица не описана в сценарии")
+    schema, table = _table_parts(source["table_name"], allow_internal=is_admin and scenario.get("is_admin", False))
+    allowed = set(source["columns_description"])
     if not allowed or not all(isinstance(name, str) and _IDENTIFIER.fullmatch(name) for name in allowed):
         raise ValueError("columns_description должен содержать имена доступных колонок как ключи")
 
@@ -137,7 +152,7 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
     result = {"rows": rows[:query.limit], "truncated": len(rows) > query.limit}
     if len(json.dumps(result, ensure_ascii=False, default=str)) > MAX_RESULT_CHARS:
         raise ValueError("Результат слишком большой: уменьши limit, выбери меньше колонок или используй агрегаты")
-    result["source"] = {"table": scenario["table_name"], "filters": [item.model_dump() for item in query.filters],
+    result["source"] = {"table": source["table_name"], "filters": [item.model_dump() for item in query.filters],
                         "jurpers": None if is_admin else payload.user_jurpers,
                         "organization": None if is_admin else payload.user_organization,
                         "all_jurpers": is_admin}

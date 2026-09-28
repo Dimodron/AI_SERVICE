@@ -8,7 +8,7 @@ from psycopg.errors import ForeignKeyViolation
 from psycopg.types.json import Jsonb
 from schemas.scenarios import ScenarioCreate, ScenarioUpdate
 
-_COLUMNS = "id, title, description, table_name, columns_description, scenario, visible_jurpers, is_active, (SELECT login FROM users WHERE users.id = scenarios.create_user) AS create_user, (SELECT login FROM users WHERE users.id = scenarios.edit_user) AS edit_user, create_time, edit_time"
+_COLUMNS = "id, title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin, is_active, (SELECT login FROM users WHERE users.id = scenarios.create_user) AS create_user, (SELECT login FROM users WHERE users.id = scenarios.edit_user) AS edit_user, create_time, edit_time"
 
 
 def _require_scenario(record):
@@ -22,24 +22,26 @@ async def create_scenario(payload: ScenarioCreate):
         async with await connect() as connection:
             creator = await author_id(connection, payload.create_user)
             cursor = await connection.execute(
-                f"INSERT INTO scenarios (title, description, table_name, columns_description, scenario, visible_jurpers, is_active, create_user) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
-                (payload.title, payload.description, payload.table_name, Jsonb(payload.columns_description),
-                 payload.scenario, payload.visible_jurpers, payload.is_active, creator),
+                f"INSERT INTO scenarios (title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin, is_active, create_user) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+                (payload.title, payload.description, payload.table_name, Jsonb(payload.columns_description), Jsonb([table.model_dump() for table in payload.tables]),
+                 payload.scenario, payload.visible_jurpers, payload.groups, payload.is_admin, payload.is_active, creator),
             )
             return await cursor.fetchone()
     except ForeignKeyViolation as error:
         raise HTTPException(422, "Пользователь create_user не найден") from error
 
 
-async def list_scenarios(is_active: bool | None, limit: int, offset: int, user_jurpers: int | None = None):
+async def list_scenarios(is_active: bool | None, limit: int, offset: int, user_jurpers: int | None = None, group: str | None = None, is_admin: bool | None = None):
     async with await connect() as connection:
         cursor = await connection.execute(
             f"SELECT {_COLUMNS} FROM scenarios "
             "WHERE (%s::boolean IS NULL OR is_active = %s) "
             "AND (%s::bigint IS NULL OR cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
+            "AND (%s::text IS NULL OR %s = ANY(groups)) "
+            "AND (%s::boolean IS NULL OR is_admin = %s) "
             "ORDER BY create_time, id LIMIT %s OFFSET %s",
-            (is_active, is_active, user_jurpers, user_jurpers, limit, offset),
+            (is_active, is_active, user_jurpers, user_jurpers, group, group, is_admin, is_admin, limit, offset),
         )
         return await cursor.fetchall()
 
@@ -54,6 +56,8 @@ async def get_scenario(scenario_id: UUID):
 
 async def update_scenario(scenario_id: UUID, payload: ScenarioUpdate):
     changes = payload.model_dump(exclude_unset=True)
+    if "tables" in changes:
+        changes["tables"] = Jsonb(changes["tables"])
     if "columns_description" in changes:
         changes["columns_description"] = Jsonb(changes["columns_description"])
     assignments = sql.SQL(", ").join(

@@ -46,12 +46,14 @@ async def directory_name(connection, table_name, name_column, filters):
     return None
 
 
-async def user_context(connection, payload, trusted_source=False):
+async def user_context(connection, payload, trusted_source=False, *, oracle_admin=None):
     cursor = await connection.execute(
         "SELECT coalesce(bool_or(is_admin), false) AS is_admin FROM users WHERE login = %s",
         (payload.user_login,),
     )
     is_admin = bool((await cursor.fetchone())["is_admin"]) and trusted_source
+    if oracle_admin is not None:
+        is_admin = bool(oracle_admin) and trusted_source
     profile = {}
     if settings.USER_CONTEXT_TABLE:
         schema, table = settings.USER_CONTEXT_TABLE.split(".")

@@ -351,3 +351,98 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             query.filters=[QueryFilter(column='jur_pers',value=99)]
             result = await query_scenario(conn,scenario,query,payload,is_admin=True)
             self.assertEqual([r['amount'] for r in result['rows']],[200])
+
+    async def test_admin_scenario_multiple_tables_and_groups(self):
+        from schemas.scenarios import ScenarioCreate, ScenarioUpdate, ScenarioResponse
+        from schemas.scenario_query import QueryFilter
+        from services.scenarios import create_scenario, update_scenario, list_scenarios, get_scenario
+        from services.scenario_runner import _table_parts
+        from pydantic import ValidationError
+        tables = [dict(table_name='public.messages', description='Requests', columns_description={'content':'Text','role':'Role'}),
+                  dict(table_name='public.conversations', description='Chats', columns_description={'title':'Title'})]
+        scenario = await create_scenario(ScenarioCreate(title='Requests', scenario='Analyse', groups=['Admin','Analytics'], is_admin=True, tables=tables, create_user='alice'))
+        ScenarioResponse.model_validate(scenario)
+        self.assertEqual((await get_scenario(scenario['id']))['tables'],tables)
+        self.assertEqual([r['id'] for r in await list_scenarios(None,100,0,group='Analytics',is_admin=True)],[scenario['id']])
+        self.assertEqual(await list_scenarios(None,100,0,group='Unknown'),[])
+        payload = ChatRequest(**self.owner,message='Analyse',save_history=False)
+        query = ScenarioQuery(scenario_id=scenario['id'],table_name='public.messages',columns=['content'],filters=[QueryFilter(column='role',value='user')])
+        async with await connect() as conn:
+            await conn.execute("INSERT INTO messages(conversation_id,role,content) VALUES (%s,'user','Need a report'),(%s,'assistant','Here')",(self.cid,self.cid))
+            _, regular = await load_chat_context(conn,10)
+            _, admin = await load_chat_context(conn,10,is_admin=True)
+            self.assertNotIn(str(scenario['id']),regular)
+            self.assertEqual(admin[str(scenario['id'])]['tables'],tables)
+            with self.assertRaises(ValueError):
+                await query_scenario(conn,scenario,query,payload)
+            result = await query_scenario(conn,scenario,query,payload,is_admin=True)
+            self.assertEqual(result['rows'],[{'content':'Need a report'}])
+            self.assertEqual(result['source']['table'],'public.messages')
+            for bad in (query.model_copy(update={'table_name':None}),query.model_copy(update={'table_name':'public.users'}),query.model_copy(update={'columns':['title']})):
+                with self.assertRaises(ValueError):
+                    await query_scenario(conn,scenario,bad,payload,is_admin=True)
+            with self.assertRaises(ValueError):
+                await query_scenario(conn,{**scenario,'is_admin':False},query,payload,is_admin=True)
+            chat_query=ScenarioQuery(scenario_id=scenario['id'],table_name='conversations',columns=['title'])
+            self.assertEqual((await query_scenario(conn,scenario,chat_query,payload,is_admin=True))['rows'],[{'title':'Title'}])
+        for table in ['pg_catalog.pg_authid','information_schema.tables']:
+            with self.assertRaises(ValueError): _table_parts(table,allow_internal=True)
+        updated = await update_scenario(scenario['id'],ScenarioUpdate(tables=[tables[0]],groups=[],is_admin=False))
+        self.assertEqual(updated['tables'],[tables[0]])
+        self.assertEqual(updated['groups'],[])
+        self.assertFalse(updated['is_admin'])
+        with self.assertRaises(ValidationError): ScenarioCreate(title='x',scenario='x',tables=[tables[0],{**tables[0],'table_name':'messages'}])
+        with self.assertRaises(ValidationError): ScenarioUpdate(tables=None)
+
+    async def test_each_scenario_table_is_scoped_for_regular_user(self):
+        payload=ChatRequest(user_login='alice',user_jurpers=10,message='Read',save_history=False)
+        async with await connect() as conn:
+            for table,col in [('first','jurpers'),('second','jur_pers')]:
+                await conn.execute(f'CREATE TABLE oracle_data.{table} ({col} bigint, amount integer)')
+                await conn.execute(f'INSERT INTO oracle_data.{table} VALUES (10,1),(20,99)')
+            scenario={'visible_jurpers':[],'is_admin':False,'tables':[{'table_name':'oracle_data.'+table,'columns_description':{'amount':'Amount'}} for table in ['first','second']]}
+            for table in ['first','second']:
+                query=ScenarioQuery(scenario_id=uuid4(),table_name='oracle_data.'+table)
+                self.assertEqual((await query_scenario(conn,scenario,query,payload))['rows'],[{'amount':1}])
+
+    async def test_oracle_role_registers_revokes_and_guards_management(self):
+        import httpx
+        from fastapi import FastAPI
+        from routers.router import router
+        from routers.prompt_router import router as prompt_router
+        from routers.scenario_router import router as scenario_router
+        app=FastAPI()
+        for r in (router,prompt_router,scenario_router): app.include_router(r)
+        headers={'X-Chat-Token':'secret','X-User-Login':'oracle-admin','X-User-Admin':'1'}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://test') as client:
+            with patch.dict(os.environ,{'CHAT_API_TOKEN':'secret'}):
+                self.assertEqual((await client.get('/api/scenarios',headers={**headers,'X-Chat-Token':'bad'})).status_code,403)
+                self.assertEqual((await client.get('/api/scenarios',headers={'X-Chat-Token':'secret'})).status_code,403)
+                malformed=await client.post('/api/system_prompt',headers={**headers,'Content-Type':'application/json'},content='{')
+                self.assertEqual(malformed.status_code,422)
+                response=await client.post('/api/system_prompt',headers=headers,json={'prompt':'Test','create_user':'someone-else'})
+                self.assertEqual(response.status_code,201,response.text)
+                self.assertEqual(response.json()['create_user'],'oracle-admin')
+                pid=response.json()['id']
+                response=await client.patch('/api/system_prompt/'+pid,headers=headers,json={'prompt':'Updated','edit_user':'someone-else'})
+                self.assertEqual(response.status_code,200,response.text)
+                self.assertEqual(response.json()['edit_user'],'oracle-admin')
+                response=await client.post('/api/scenarios',headers=headers,json={'title':'Admin','scenario':'Read','is_admin':True})
+                self.assertEqual(response.status_code,201,response.text)
+                async with await connect() as conn:
+                    row=await(await conn.execute("SELECT is_admin FROM users WHERE login='oracle-admin'")).fetchone()
+                    self.assertTrue(row['is_admin'])
+                with patch('services.chat.resolve_model',AsyncMock(return_value='test')):
+                    response=await client.post('/api/chat/create',headers=headers,json={'user_login':'oracle-admin'})
+                    self.assertEqual(response.status_code,201,response.text)
+                    response=await client.post('/api/chat/create',headers=headers,json={'user_login':'alice'})
+                    self.assertEqual(response.status_code,403)
+                denied={**headers,'X-User-Admin':'0'}
+                for path in ('/api/scenarios','/api/system_prompt'):
+                    self.assertEqual((await client.get(path,headers=denied)).status_code,403)
+                async with await connect() as conn:
+                    row=await(await conn.execute("SELECT is_admin FROM users WHERE login='oracle-admin'")).fetchone()
+                    self.assertFalse(row['is_admin'])
+                self.assertEqual((await client.get('/api/models/config',headers=denied)).status_code,200)
+            with patch.dict(os.environ,{'CHAT_API_TOKEN':''}):
+                self.assertEqual((await client.get('/api/scenarios',headers=headers)).status_code,403)

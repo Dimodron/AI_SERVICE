@@ -16,6 +16,11 @@ async function until(check) {
 async function fixture(admin = true) {
     const dom = new JSDOM(`<main id="chat_body"><div class="head-actions"></div><div class="chathead"></div><div id="chatStatus"></div><div id="chatTitle"></div><div id="chatMessages"></div><div id="chatList"></div><input id="chatSearch"><button id="newChatBtn"><span class="new-chat-plus"></span></button><div class="composer"><div id="selectedFiles"></div><textarea id="prompt"></textarea><button id="attachBtn"></button><button id="sendBtn"></button></div><input type="file" id="P237_GPT_FILES"><div class="hint"></div></main>`, {runScripts:'outside-only', url:'http://example.test'});
     const win = dom.window, $ = jquery(win);
+    if (admin) {
+        $("body").append('<div id="gptAdminControls"><button id="gptAdminGear"></button><div id="gptAdminMenu" style="display:none"><button data-admin-list="prompts">Prompts</button><button data-admin-list="scenarios">Scenarios</button></div></div>');
+        for (const name of ['prompts_list','prompts_edit','scenarios_list','scenarios_edit']) $("body").append(fs.readFileSync(path.join(__dirname,'../oracle_serv/admin_regions/'+name+'.html'),'utf8'));
+    }
+    const adminRows = {prompts:[], scenarios:[]};
     let active = '', fail = false, stored = false, model = 'test';
     const calls = [];
     win.$v = () => active;
@@ -24,8 +29,21 @@ async function fixture(admin = true) {
         url: args => '/download?id=' + args.x01,
         process: (name, data, options) => {
             calls.push({name, data});
+            if (name === 'GPTChat' || name === 'GPTAttachFiles') {
+                assert.equal($('#prompt').val(), '', 'composer clears before server response');
+                assert.equal($('#selectedFiles').children().length, 0, 'attachments clear before server response');
+                assert.equal($('#sendBtn').prop('disabled'), true, 'prevent double submit');
+            }
             setTimeout(() => {
                 if (name === 'GPTConfig') return options.success({max_files:5,max_file_bytes:5242880,extensions:['.txt'],default_model:'test',can_select_model:admin,models:admin?['test','second']:[]});
+                if (name === 'GPTAdminList') return options.success(adminRows[data.x01]);
+                if (name === 'GPTAdminSave') {
+                    if (fail) return options.success({status:'error',message:'save failed'});
+                    const body=JSON.parse(data.f01.join(''));
+                    const row={...body,id:data.x02 || 'admin-record'};
+                    adminRows[data.x01]=[row];
+                    return options.success(row);
+                }
                 if (name === 'GPTListChats') return options.success([{conversation_id:cid,model:'test',title:'Chat'}]);
                 if (name === 'GPTCreateChat') return options.success({conversation_id:cid,model:'test'});
                 if (name === 'GPTFileChunk' || name === 'GPTFileCancel') return options.success({});
@@ -143,5 +161,58 @@ async function fixture(admin = true) {
     await until(() => !switching.$('#sendBtn').prop('disabled'));
     assert.equal(switching.$('#gptModel').val(), 'second', 'reopening must use saved model');
     switching.dom.window.close();
+    const management=await fixture();
+    const m=management.$;
+    m('#prompt').val('Chat draft');
+    m('#gptAdminGear').trigger('click');
+    assert.equal(m('#gptAdminGear').attr('aria-expanded'),'true');
+    m('[data-admin-list="prompts"]').trigger('click');
+    await until(()=>!m('[data-admin-new="prompts"]').prop('disabled'));
+    m('[data-admin-new="prompts"]').trigger('click');
+    const longPrompt='Правило '.repeat(1500);
+    m('#gpt-prompts-edit [data-field="prompt"]').val(longPrompt);
+    m('[data-admin-save="prompts"]').trigger('click');
+    await until(()=>m('#gpt-prompts-list .gpt-admin-row').length===1 && !m('[data-admin-new="prompts"]').prop('disabled'));
+    let saved=management.calls.filter(c=>c.name==='GPTAdminSave').at(-1);
+    assert.equal(JSON.parse(saved.data.f01.join('')).prompt,longPrompt.trim());
+    assert.ok(saved.data.f01.length>1,'large Unicode bodies use chunks');
+    m('#gpt-prompts-list .gpt-admin-row button').trigger('click');
+    m('#gpt-prompts-edit [data-field="prompt"]').val('Changed');
+    management.setFailure(true);
+    m('[data-admin-save="prompts"]').trigger('click');
+    await until(()=>m('#gpt-prompts-edit .gpt-admin-status').text()==='save failed');
+    assert.equal(m('#gpt-prompts-edit [data-field="prompt"]').val(),'Changed');
+    management.setFailure(false);
+    m('[data-admin-save="prompts"]').trigger('click');
+    await until(()=>m('#gpt-prompts-list').css('display')!=='none' && !m('[data-admin-new="prompts"]').prop('disabled'));
+    saved=management.calls.filter(c=>c.name==='GPTAdminSave').at(-1);
+    assert.equal(saved.data.x02,'admin-record');
+    m('#gpt-prompts-list [data-admin-close]').trigger('click');
+    assert.equal(m('#prompt').val(),'Chat draft');
+    m('[data-admin-list="scenarios"]').trigger('click');
+    await until(()=>!m('[data-admin-new="scenarios"]').prop('disabled'));
+    m('[data-admin-new="scenarios"]').trigger('click');
+    m('#gpt-scenarios-edit [data-field="title"]').val('Analyse');
+    m('#gpt-scenarios-edit [data-field="scenario"]').val('Read messages');
+    m('#gpt-scenarios-edit [data-field="groups"]').val('Admin, Analytics');
+    m('#gpt-scenarios-edit [data-field="is_admin"]').prop('checked',true);
+    for(const table of ['public.messages','public.conversations']) {
+        m('[data-admin-add-table]').trigger('click');
+        const row=m('.gpt-admin-table').last();
+        row.find('[data-table-field="table_name"]').val(table);
+        row.find('[data-table-field="description"]').val('Description');
+        row.find('[data-table-field="columns_description"]').val('{"id":"Identifier"}');
+    }
+    m('[data-admin-save="scenarios"]').trigger('click');
+    await until(()=>m('#gpt-scenarios-list .gpt-admin-row').length===1 && !m('[data-admin-new="scenarios"]').prop('disabled'));
+    saved=JSON.parse(management.calls.filter(c=>c.name==='GPTAdminSave').at(-1).data.f01.join(''));
+    assert.equal(saved.tables.length,2);
+    assert.equal(saved.is_admin,true);
+    assert.deepEqual(saved.groups,['Admin','Analytics']);
+    management.dom.window.close();
+    const restricted=await fixture(false);
+    assert.equal(restricted.$('#gptAdminGear').length,0);
+    assert.equal(restricted.calls.filter(c=>c.name==='GPTAdminList').length,0);
+    restricted.dom.window.close();
     console.log('UI workflows passed: selection, paste, drop, attachment-only, failure/retry, history, draft, SVG and model switching.');
 })().catch(error=>{ console.error(error); process.exitCode=1; });

@@ -58,8 +58,11 @@ CREATE TABLE IF NOT EXISTS scenarios (
     description TEXT,
     table_name TEXT,
     columns_description JSONB NOT NULL DEFAULT '{}'::jsonb,
+    tables JSONB NOT NULL DEFAULT '[]'::jsonb,
     scenario TEXT NOT NULL,
     visible_jurpers BIGINT[] NOT NULL DEFAULT '{}',
+    groups TEXT[] NOT NULL DEFAULT '{}',
+    is_admin BOOLEAN NOT NULL DEFAULT FALSE,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     create_user UUID REFERENCES users(id),
     edit_user UUID REFERENCES users(id),
@@ -77,3 +80,8 @@ CREATE TABLE IF NOT EXISTS system_prompt (
     create_time TIMESTAMPTZ NOT NULL DEFAULT now(),
     edit_time TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Existing scenarios retain their previous visibility and have no groups.
+ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS groups TEXT[] NOT NULL DEFAULT '{}';
+ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS tables JSONB NOT NULL DEFAULT '[]'::jsonb;
