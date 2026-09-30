@@ -1,18 +1,17 @@
-from config import settings
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
+from config import settings
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    JsonValue,
     StrictBool,
     model_validator,
 )
-from schemas.reports import ReportResponse
 from schemas.files import FileResponse
+from schemas.reports import ReportResponse
 
 
 class ModelOptions(BaseModel):
@@ -38,26 +37,14 @@ class GenerationSettings(BaseModel):
     )
 
 
-class GenerateRequest(GenerationSettings):
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    prompt: str = Field(min_length=1, description="Текст запроса к модели.", examples=["Объясни, как работает Redis"])
-    model: str | None = Field(default=None, min_length=1, description="Имя модели из GET /api/models. Если не задано, используется DEFAULT_MODEL из settings.toml.", examples=["qwen3.5:4b"])
-
-
-class GenerateResponse(BaseModel):
-    response: str = Field(description="Конечный ответ модели без текста рассуждений.")
-
-
 class ChatOwner(BaseModel):
     user_login: str = Field(min_length=1, max_length=200)
-    user_jurpers: int | None = Field(default=None, strict=True, ge=-(2**63), le=2**63 - 1, description="Не влияет на владельца чата; оставлено для совместимости. В запросе сообщения user_jurpers обязателен.")
 
 
 class ChatCreateRequest(ChatOwner):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
-    model: str | None = Field(default=None, min_length=1, description="Модель диалога. По умолчанию DEFAULT_MODEL из settings.toml; выбирать другую может только администратор.")
+    model: str | None = Field(default=None, min_length=1, description="Модель диалога. По умолчанию DEFAULT_MODEL из settings.toml. Выбор для пользователей ограничивается интерфейсом APEX.")
 
 
 class ChatModelRequest(ChatOwner):
@@ -82,9 +69,8 @@ class ChatRequest(GenerationSettings):
     conversation_id: UUID | None = Field(default=None, description="ID диалога, созданного через POST /api/chat/create. Требует save_history=true; используются его история, файлы и текущая модель.")
     model: str | None = Field(default=None, min_length=1, description="Имя модели из GET /api/models. Для нового запроса используется DEFAULT_MODEL из settings.toml; для существующего диалога — сохранённая. Для переключения модели используйте PATCH /api/chat/{conversation_id}/model.", examples=["qwen3.5:4b"])
     user_login: str = Field(min_length=1, description="Логин пользователя.", examples=["ivan"])
-    user_jurpers: int = Field(strict=True, ge=-(2**63), le=2**63 - 1, description="Идентификатор jurpers пользователя (BIGINT).", examples=[123])
+    user_jurpers: int = Field(strict=True, ge=-(2**63), le=2**63 - 1, description="Текущее выбранное юрлицо из сессии Oracle/APEX (BIGINT); не хранится в users.", examples=[123])
     user_organization: int | None = Field(default=None, strict=True, ge=-(2**63), le=2**63 - 1, description="Необязательный фильтр organization для данных сценариев. Применяется вместе с user_jurpers.", examples=[42])
-    user_info: dict[str, JsonValue] = Field(default_factory=dict, description="Дополнительная информация о пользователе в виде JSON-объекта.", examples=[{"name": "Иван", "organization": 42}])
 
     @model_validator(mode="after")
     def validate_history(self):

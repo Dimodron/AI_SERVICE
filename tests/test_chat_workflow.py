@@ -30,11 +30,12 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             await conn.execute('TRUNCATE users, conversations, messages, files, conversation_files, message_files, scenarios, system_prompt CASCADE')
             await conn.execute('DROP SCHEMA IF EXISTS oracle_data CASCADE')
             await conn.execute('CREATE SCHEMA oracle_data')
-            user = await (await conn.execute("INSERT INTO users(login,jurpers,is_admin) VALUES ('alice',10,true) RETURNING id")).fetchone()
+            user = await (await conn.execute("INSERT INTO users(login,is_admin) VALUES ('alice',true) RETURNING id")).fetchone()
             self.cid = (await (await conn.execute("INSERT INTO conversations(user_uuid,model,title) VALUES (%s,'test','Title') RETURNING id", (user['id'],))).fetchone())['id']
             self.fid = uuid4()
             await conn.execute("INSERT INTO files(id,filename,media_type,size_bytes,extracted_text,content) VALUES (%s,'debt.txt','text/plain',4,'DEBT=42',%s)", (self.fid,b'test'))
-        self.owner = dict(user_login='alice', user_jurpers=10)
+        self.owner = dict(user_login='alice')
+        self.context = dict(user_login='alice', user_jurpers=10)
 
     async def asyncTearDown(self):
         await self.life.__aexit__(None, None, None)
@@ -50,13 +51,13 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(data.files[0].file_id, self.fid)
         answer = AsyncMock(return_value=('42', []))
         with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', answer):
-            await chat(ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Сколько?'))
+            await chat(ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Сколько?'))
         messages = answer.call_args.args[3]
         self.assertIn('DEBT=42', messages[-1]['content'])
         self.assertTrue(messages[-1]['content'].endswith('Сколько?'))
 
     async def test_question_and_file_rollback_retry_and_history(self):
-        request = ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Проверь', file_ids=[self.fid])
+        request = ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Проверь', file_ids=[self.fid])
         with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', AsyncMock(side_effect=HTTPException(503,'offline'))):
             with self.assertRaises(HTTPException):
                 await chat(request)
@@ -67,12 +68,12 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             await chat(request)
         data = await history(HistoryRequest(**self.owner, conversation_id=self.cid))
         self.assertEqual(data.history[0].files[0].filename, 'debt.txt')
-        await delete_chat(self.cid, 'alice', 10)
+        await delete_chat(self.cid, 'alice')
         async with await connect() as conn:
             self.assertEqual((await (await conn.execute('SELECT count(*) n FROM message_files')).fetchone())['n'], 0)
 
     async def test_profile_and_admin_not_controlled_by_client(self):
-        payload = ChatRequest(**self.owner, message='Кто я?', user_info={'is_admin': True})
+        payload = ChatRequest(**self.context, message='Кто я?')
         async with await connect() as conn:
             # Missing optional view must not break the transaction.
             _, admin = await user_context(conn, payload)
@@ -101,7 +102,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             messages, scenarios = await load_chat_context(conn, 10, is_admin=True)
             self.assertNotIn('BUSINESS PROMPT', str(messages))
             scenario = scenarios[str(sid)]
-            payload = ChatRequest(**self.owner, message='all')
+            payload = ChatRequest(**self.context, message='all')
             query = ScenarioQuery(scenario_id=sid, columns=['amount'])
             with self.assertRaises(ValueError):
                 await query_scenario(conn, scenario, query, payload)
@@ -113,7 +114,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
 
     async def test_wrong_owner_cannot_attach(self):
         with self.assertRaises(HTTPException) as error:
-            await attach_files(self.cid, AttachFilesRequest(user_login='other',user_jurpers=10,file_ids=[self.fid]))
+            await attach_files(self.cid, AttachFilesRequest(user_login='other',file_ids=[self.fid]))
         self.assertEqual(error.exception.status_code, 404)
 
     async def test_service_token(self):
@@ -163,8 +164,8 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             return httpx.Response(200, json={"done":True,"message":{"role":"assistant","content":"42"}})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler),base_url='http://ollama.test') as client:
             with patch.object(QueenModels, '_client', client), patch('services.chat.resolve_model', AsyncMock(return_value='test')):
-                await chat(ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Проверь файл', file_ids=[self.fid]))
-                await chat(ChatRequest(**self.owner, conversation_id=self.cid, save_history=True, message='Повтори сумму'))
+                await chat(ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Проверь файл', file_ids=[self.fid]))
+                await chat(ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Повтори сумму'))
         for body in captured:
             messages = body['messages']
             self.assertEqual(sum(item['role']=='system' for item in messages),1)
@@ -191,7 +192,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             await upload.close()
         answer = AsyncMock(return_value=('12500', []))
         with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', answer):
-            await chat(ChatRequest(**self.owner, message='Анализ',file_ids=[file['file_id']]))
+            await chat(ChatRequest(**self.context, message='Анализ',file_ids=[file['file_id']]))
         content = answer.call_args.args[3][-1]['content']
         self.assertIn('Учреждение 1', content)
         self.assertIn('12500', content)
@@ -230,7 +231,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             await conn.execute("CREATE TABLE oracle_data.zv_gpt_organizations (organization numeric, jurpers numeric, organization_name text)")
             await conn.execute("INSERT INTO oracle_data.zv_gpt_organizations VALUES (20,10,'Текущая организация'), (30,99,'Чужая организация')")
             for org, expected in ((20,'Текущая организация'), (30,None), (None,None), (0,None)):
-                payload = ChatRequest(**self.owner, message='Где работаю?', user_organization=org)
+                payload = ChatRequest(**self.context, message='Где работаю?', user_organization=org)
                 message, _ = await user_context(conn, payload)
                 data = json.loads(message['content'].split('\n',1)[1])
                 self.assertEqual(data['profile']['jurpers_name'],'Личное юрлицо')
@@ -246,7 +247,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             await conn.execute("INSERT INTO oracle_data.zv_gpt_jurpers VALUES (10,'One'), (10,'Two')")
             # Missing organization_name is handled inside a savepoint.
             await conn.execute('CREATE TABLE oracle_data.zv_gpt_organizations (organization numeric, jurpers numeric)')
-            payload = ChatRequest(**self.owner,message='test',user_organization=20)
+            payload = ChatRequest(**self.context,message='test',user_organization=20)
             message, _ = await user_context(conn, payload)
             data = json.loads(message['content'].split('\n',1)[1])
             self.assertIsNone(data['selected_jurpers_name'])
@@ -271,7 +272,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual(data.files[0].file_id,self.fid)
         answer = AsyncMock(return_value=('ok',[]))
         with patch('services.chat.resolve_model',AsyncMock(side_effect=lambda model:model)), patch('services.chat.answer_with_scenarios',answer):
-            await chat(ChatRequest(**self.owner,conversation_id=self.cid,save_history=True,message='Продолжи'))
+            await chat(ChatRequest(**self.context,conversation_id=self.cid,save_history=True,message='Продолжи'))
         self.assertEqual(answer.call_args.args[1],'new-model')
         self.assertIn('DEBT=42',answer.call_args.args[3][-1]['content'])
 
@@ -302,37 +303,37 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         from schemas.qwen import ChatCreateRequest, ChatModelRequest
         from services.chat import create_chat, list_chats, change_chat_model
         with patch('services.chat.resolve_model',AsyncMock(return_value='test')):
-            created = await create_chat(ChatCreateRequest(user_login='alice',user_jurpers=99))
+            created = await create_chat(ChatCreateRequest(user_login='alice'))
         async with await connect() as conn:
             row = await (await conn.execute("SELECT count(*) n FROM users WHERE login='alice'")).fetchone()
             self.assertEqual(row['n'],1)
-        self.assertEqual(len(await list_chats('alice',99,100,0)),2)
-        owner = dict(user_login='alice',user_jurpers=99)
+        self.assertEqual(len(await list_chats('alice',100,0)),2)
+        owner = dict(user_login='alice')
         await attach_files(self.cid,AttachFilesRequest(**owner,file_ids=[self.fid]))
         self.assertEqual(len((await history(HistoryRequest(**owner,conversation_id=self.cid))).files),1)
         with patch('services.chat.resolve_model',AsyncMock(return_value='second')):
             await change_chat_model(self.cid,ChatModelRequest(**owner,model='second'))
         answer = AsyncMock(return_value=('ok',[]))
         with patch('services.chat.resolve_model',AsyncMock(return_value='second')),patch('services.chat.answer_with_scenarios',answer):
-            await chat(ChatRequest(**owner,conversation_id=self.cid,save_history=True,message='Текущее юрлицо'))
+            await chat(ChatRequest(**owner,user_jurpers=99,conversation_id=self.cid,save_history=True,message='Текущее юрлицо'))
         self.assertEqual(answer.call_args.args[2].user_jurpers,99)
         self.assertIn('"selected_jurpers": 99',answer.call_args.args[3][0]['content'])
-        await delete_chat(created.conversation_id,'alice',99)
-        self.assertEqual(len(await list_chats('alice',None,100,0)),1)
+        await delete_chat(created.conversation_id, 'alice')
+        self.assertEqual(len(await list_chats('alice',100,0)),1)
 
     async def test_legacy_duplicate_accounts_keep_chats_visible_without_new_duplicates(self):
         from schemas.qwen import ChatCreateRequest
         from services.chat import create_chat, list_chats
         async with await connect() as conn:
-            user = await (await conn.execute("INSERT INTO users(login,jurpers) VALUES ('alice',99) RETURNING id")).fetchone()
+            user = await (await conn.execute("INSERT INTO users(login) VALUES ('alice') RETURNING id")).fetchone()
             await conn.execute("INSERT INTO conversations(user_uuid,model) VALUES (%s,'test')",(user['id'],))
         with patch('services.chat.resolve_model',AsyncMock(return_value='test')):
             await create_chat(ChatCreateRequest(user_login='alice'))
-        self.assertEqual(len(await list_chats('alice',None,100,0)),3)
+        self.assertEqual(len(await list_chats('alice',100,0)),3)
         async with await connect() as conn:
             row = await (await conn.execute("SELECT count(*) n FROM users WHERE login='alice'")).fetchone()
             self.assertEqual(row['n'],2)
-        self.assertFalse(await list_chats('other',10,100,0))
+        self.assertFalse(await list_chats('other',100,0))
         with self.assertRaises(HTTPException):
             await history(HistoryRequest(user_login='other',conversation_id=self.cid))
 
@@ -365,7 +366,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         self.assertEqual((await get_scenario(scenario['id']))['tables'],tables)
         self.assertEqual([r['id'] for r in await list_scenarios(None,100,0,group='Analytics',is_admin=True)],[scenario['id']])
         self.assertEqual(await list_scenarios(None,100,0,group='Unknown'),[])
-        payload = ChatRequest(**self.owner,message='Analyse',save_history=False)
+        payload = ChatRequest(**self.context,message='Analyse',save_history=False)
         query = ScenarioQuery(scenario_id=scenario['id'],table_name='public.messages',columns=['content'],filters=[QueryFilter(column='role',value='user')])
         async with await connect() as conn:
             await conn.execute("INSERT INTO messages(conversation_id,role,content) VALUES (%s,'user','Need a report'),(%s,'assistant','Here')",(self.cid,self.cid))
@@ -495,3 +496,29 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
                 for schema,table in [('pg_catalog','pg_authid'),('public','missing'),('oracle_data','catalog_view')]:
                     self.assertEqual((await client.get(path+'columns',params={'schema':schema,'table':table},headers=headers)).status_code,404)
                 self.assertEqual((await client.get(path+'tables',params={'schema':"public'; DROP TABLE users;--"},headers=headers)).status_code,422)
+
+    async def test_cleanup_existing_users_preserves_chat_and_file_links(self):
+        async with await connect() as conn:
+            await conn.execute('ALTER TABLE users ADD COLUMN name text, ADD COLUMN jurpers bigint, ADD COLUMN organization bigint')
+            await conn.execute("UPDATE users SET name='Old',jurpers=10,organization=20")
+            await conn.execute('INSERT INTO conversation_files VALUES (%s,%s)', (self.cid,self.fid))
+        script = (Path(__file__).resolve().parents[1] / 'database/cleanup_users.sql').read_text()
+        for _ in range(2):
+            async with await connect() as conn:
+                await conn.execute(script)
+        async with await connect() as conn:
+            columns = await (await conn.execute("SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='users'")).fetchall()
+            self.assertEqual({r['column_name'] for r in columns}, {'id','login','is_admin','created_at'})
+        data = await history(HistoryRequest(**self.owner,conversation_id=self.cid))
+        self.assertEqual(len(data.files), 1)
+        self.assertEqual(data.model, 'test')
+
+    async def test_removed_model_fields_are_not_accepted(self):
+        from pydantic import ValidationError
+        from schemas.qwen import ChatCreateRequest
+        self.assertNotIn('user_jurpers', ChatCreateRequest.model_fields)
+        self.assertNotIn('user_info', ChatRequest.model_fields)
+        with self.assertRaises(ValidationError):
+            ChatCreateRequest(user_login='alice',user_jurpers=10)
+        with self.assertRaises(ValidationError):
+            ChatRequest(**self.context,message='test',user_info={'is_admin':True})

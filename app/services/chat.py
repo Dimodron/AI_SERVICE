@@ -154,7 +154,7 @@ async def history(payload: HistoryRequest) -> HistoryResponse:
             row["files"] = await files_cursor.fetchall()
         return HistoryResponse(model=conversation["model"], history=rows, files=await conversation_attachments(connection, payload.conversation_id))
 
-async def list_chats(user_login: str, user_jurpers: int | None, limit: int, offset: int):
+async def list_chats(user_login: str, limit: int, offset: int):
     async with await connect() as connection:
         cursor = await connection.execute(
             "SELECT c.id AS conversation_id, c.model, c.title, c.created_at, c.last_message_at "
@@ -166,7 +166,7 @@ async def list_chats(user_login: str, user_jurpers: int | None, limit: int, offs
         return await cursor.fetchall()
 
 
-async def delete_chat(conversation_id, user_login: str, user_jurpers: int | None):
+async def delete_chat(conversation_id, user_login: str):
     async with await connect() as connection:
         cursor = await connection.execute(
             "DELETE FROM conversations c USING users u WHERE c.user_uuid = u.id "

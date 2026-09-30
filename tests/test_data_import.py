@@ -96,7 +96,7 @@ class ImportTests(unittest.IsolatedAsyncioTestCase):
         await self.lifespan.__aenter__()
         async with await connect() as connection:
             await connection.execute('DROP SCHEMA IF EXISTS oracle_data CASCADE')
-            await connection.execute((Path(__file__).resolve().parents[1] / 'database/import_history.sql').read_text())
+            await connection.execute((Path(__file__).resolve().parents[1] / 'database/init.sql').read_text())
             await connection.execute('TRUNCATE public.data_import_history')
         self.environment = patch.dict(os.environ, {'ORACLE_HOST': 'test', 'ORACLE_USER': 'reader', 'ORACLE_PASS': 'test', 'ORACLE_NAME': 'test'})
         self.environment.start()

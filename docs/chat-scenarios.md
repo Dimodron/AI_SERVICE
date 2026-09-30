@@ -81,7 +81,7 @@ JOIN и запись данных не поддерживаются. Сложн�
 ```
 
 `user_organization` — отдельное необязательное поле запроса; значение из
-`user_info` не используется как фильтр. `user_jurpers` и `user_organization`
+`user_info` удалён из модели запроса. `user_jurpers` и `user_organization`
 пока поступают из тела запроса. Это фильтрация данных, а не аутентификация:
 доверенный вызывающий сервис должен передавать проверенные значения.
 Создание чата, список, история, отправка сообщений и удаление используют владельца
@@ -107,7 +107,7 @@ TEST_DATABASE=1 PYTHONPATH=app python -m unittest discover -s tests -v
 Для диалога с историей сначала вызови `POST /api/chat/create`:
 
 ```json
-{"user_login": "ivan", "user_jurpers": 123}
+{"user_login": "ivan"}
 ```
 
 Необязательное поле `model` закрепляет модель за диалогом; без него выбирается
@@ -200,9 +200,9 @@ PostgreSQL переносятся как точные строки без окр
 
 ## Список, история и удаление чатов
 
-- `GET /api/chats?user_login=ivan&user_jurpers=123&limit=100&offset=0` — список собственных чатов.
-- `POST /api/chat/history` требует `conversation_id`, `user_login`, `user_jurpers` и параметры пагинации.
-- `DELETE /api/chat/{id}?user_login=ivan&user_jurpers=123` — удаление чата, сообщений и привязок файлов, ответ `204`.
+- `GET /api/chats?user_login=ivan&limit=100&offset=0` — список собственных чатов.
+- `POST /api/chat/history` требует `conversation_id`, `user_login` и параметры пагинации.
+- `DELETE /api/chat/{id}?user_login=ivan` — удаление чата, сообщений и привязок файлов, ответ `204`.
 
 Чужой/несуществующий чат возвращает `404`. Файлы из общей таблицы `files` не
 удаляются: они могут использоваться другими диалогами. Старые записи чатов без
