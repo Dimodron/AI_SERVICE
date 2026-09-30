@@ -36,6 +36,9 @@ PG_POOL_TIMEOUT = 10
 PG_CONNECT_TIMEOUT = 10
 
 # Сценарии и импорт бизнес-данных.
+# Число автоматических продолжений processing и исправлений формата ответа.
+MAX_ANSWER_CONTINUATIONS = 3
+MAX_ANSWER_REPAIRS = 2
 MAX_TOOL_CALLS = 6
 MAX_RESULT_CHARS = 60000
 DATA_IMPORT_TIMEOUT = 600

@@ -99,7 +99,7 @@ class QwenStrategy:
             function = call["function"]
             if not isinstance(function.get("name"), str) or not isinstance(function.get("arguments"), dict):
                 raise QwenResponseError("Некорректные аргументы инструмента Ollama")
-        return {**message, "role": "assistant"}
+        return {**message, "role": "assistant", "_done_reason": data.get("done_reason")}
 
     async def ensure_vision(self) -> None:
         if _client is None:

@@ -37,6 +37,8 @@ class Settings(BaseModel):
     PG_POOL_MAX_WAITING: PositiveInt
     PG_POOL_TIMEOUT: PositiveInt
     PG_CONNECT_TIMEOUT: PositiveInt
+    MAX_ANSWER_CONTINUATIONS: PositiveInt = 3
+    MAX_ANSWER_REPAIRS: PositiveInt = 2
     MAX_TOOL_CALLS: PositiveInt
     MAX_RESULT_CHARS: PositiveInt
     DATA_IMPORT_TIMEOUT: PositiveInt

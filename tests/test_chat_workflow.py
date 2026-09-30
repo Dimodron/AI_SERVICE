@@ -161,7 +161,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         captured = []
         async def handler(request):
             captured.append(json.loads(request.content))
-            return httpx.Response(200, json={"done":True,"message":{"role":"assistant","content":"42"}})
+            return httpx.Response(200, json={"done":True,"message":{"role":"assistant","content":json.dumps({"status":"completed","response":"42"})}})
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler),base_url='http://ollama.test') as client:
             with patch.object(QueenModels, '_client', client), patch('services.chat.resolve_model', AsyncMock(return_value='test')):
                 await chat(ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Проверь файл', file_ids=[self.fid]))
@@ -173,6 +173,9 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             self.assertIn('DEBT=42',messages[-1]['content'])
             self.assertIn('debt.txt',messages[-1]['content'])
         self.assertTrue(captured[-1]['messages'][-1]['content'].endswith('Повтори сумму'))
+        saved = await history(HistoryRequest(**self.owner, conversation_id=self.cid))
+        self.assertTrue(all(row.content == '42' for row in saved.history if row.role == 'assistant'))
+
 
     async def test_excel_extraction_reaches_last_user_turn(self):
         from io import BytesIO
@@ -497,6 +500,7 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
                     self.assertEqual((await client.get(path+'columns',params={'schema':schema,'table':table},headers=headers)).status_code,404)
                 self.assertEqual((await client.get(path+'tables',params={'schema':"public'; DROP TABLE users;--"},headers=headers)).status_code,422)
 
+    @skipUnless((Path(__file__).resolve().parents[1] / "database/cleanup_users.sql").exists(), "optional legacy cleanup script is absent")
     async def test_cleanup_existing_users_preserves_chat_and_file_links(self):
         async with await connect() as conn:
             await conn.execute('ALTER TABLE users ADD COLUMN name text, ADD COLUMN jurpers bigint, ADD COLUMN organization bigint')
