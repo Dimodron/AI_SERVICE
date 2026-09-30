@@ -56,18 +56,29 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
         self.assertIn('DEBT=42', messages[-1]['content'])
         self.assertTrue(messages[-1]['content'].endswith('Сколько?'))
 
-    async def test_question_and_file_rollback_retry_and_history(self):
-        request = ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Проверь', file_ids=[self.fid])
+    async def test_question_and_file_survive_failure_retry_and_history(self):
+        request = ChatRequest(**self.context, conversation_id=self.cid, save_history=True, message='Проверь', file_ids=[self.fid],request_id=uuid4())
         with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', AsyncMock(side_effect=HTTPException(503,'offline'))):
             with self.assertRaises(HTTPException):
                 await chat(request)
         data = await history(HistoryRequest(**self.owner, conversation_id=self.cid))
-        self.assertFalse(data.history)
-        self.assertFalse(data.files)
+        self.assertEqual(len(data.history),1)
+        self.assertEqual(data.history[0].content,"Проверь")
+        self.assertEqual(data.history[0].request_id,request.request_id)
+        self.assertEqual(len(data.files),1)
         with patch('services.chat.resolve_model', AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios', AsyncMock(return_value=('Ответ', []))):
             await chat(request)
         data = await history(HistoryRequest(**self.owner, conversation_id=self.cid))
         self.assertEqual(data.history[0].files[0].filename, 'debt.txt')
+        self.assertEqual([row.role for row in data.history], ['user','assistant'])
+        with patch('services.chat.answer_with_scenarios', AsyncMock()) as generation:
+            cached = await chat(request)
+            generation.assert_not_awaited()
+            self.assertEqual(cached.response, 'Ответ')
+        with self.assertRaises(HTTPException) as conflict:
+            await chat(request.model_copy(update={'message':'Другой вопрос'}))
+        self.assertEqual(conflict.exception.status_code,409)
+
         await delete_chat(self.cid, 'alice')
         async with await connect() as conn:
             self.assertEqual((await (await conn.execute('SELECT count(*) n FROM message_files')).fetchone())['n'], 0)
@@ -526,3 +537,22 @@ class ChatWorkflowTests(IsolatedAsyncioTestCase):
             ChatCreateRequest(user_login='alice',user_jurpers=10)
         with self.assertRaises(ValidationError):
             ChatRequest(**self.context,message='test',user_info={'is_admin':True})
+
+    async def test_model_connection_failure_keeps_question(self):
+        request = ChatRequest(**self.context,conversation_id=self.cid,save_history=True,message="Вопрос",request_id=uuid4())
+        with patch('services.chat.resolve_model',AsyncMock(side_effect=HTTPException(503,'offline'))):
+            with self.assertRaises(HTTPException):
+                await chat(request)
+        data=await history(HistoryRequest(**self.owner,conversation_id=self.cid))
+        self.assertEqual([row.content for row in data.history],["Вопрос"])
+
+    async def test_parallel_duplicate_request_generates_once(self):
+        import asyncio
+        request=ChatRequest(**self.context,conversation_id=self.cid,save_history=True,message="Вопрос",request_id=uuid4())
+        generation=AsyncMock(return_value=("Ответ",[]))
+        with patch('services.chat.resolve_model',AsyncMock(return_value='test')), patch('services.chat.answer_with_scenarios',generation):
+            results=await asyncio.gather(chat(request),chat(request))
+        self.assertEqual([r.response for r in results],["Ответ","Ответ"])
+        self.assertEqual(generation.await_count,1)
+        data=await history(HistoryRequest(**self.owner,conversation_id=self.cid))
+        self.assertEqual([r.role for r in data.history],['user','assistant'])

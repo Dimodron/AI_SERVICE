@@ -22,7 +22,7 @@ async function fixture(admin = true) {
         for (const name of ['prompts_list','prompts_edit','scenarios_list','scenarios_edit','export_list']) $("body").append(fs.readFileSync(path.join(__dirname,'../oracle_serv/admin_regions/'+name+'.html'),'utf8'));
     }
     const adminRows = {prompts:[], scenarios:[]};
-    let active = '', fail = false, stored = false, model = 'test';
+    let active = '', fail = false, stored = false, model = 'test', lastQuestion = null;
     const calls = [];
     win.$v = () => active;
     win.$s = (_name, value) => {active = value;};
@@ -67,12 +67,14 @@ async function fixture(admin = true) {
                     return options.success({conversation_id:cid,model,title:'Chat'});
                 }
                 if (name === 'GPTChat') {
+                    lastQuestion={role:'user',content:data.x01,files:data.x04?[file]:[],request_id:data.x05};
+                    stored=true;
                     if (fail) return options.success({status:'error',message:'offline'});
                     stored = true;
                     return options.success({response:'42',title:'Debt',model,files:[]});
                 }
                 if (name === 'GPTAttachFiles') { stored = true; return options.success({files:[file]}); }
-                if (name === 'GPTLoadChat') return options.success({model,history:stored?[{role:'user',content:'',files:[file]}]:[],files:stored?[file]:[]});
+                if (name === 'GPTLoadChat') return options.success({model,history:stored?(lastQuestion?[lastQuestion]:[{role:'user',content:'',files:[file]}]):[],files:stored?[file]:[]});
                 throw new Error('Unexpected call ' + name);
             }, 0);
         }
@@ -134,17 +136,21 @@ async function fixture(admin = true) {
     retry.$('#prompt').val('Сохрани мой вопрос');
     retry.$('#sendBtn').trigger('click');
     await until(() => !retry.$('#sendBtn').prop('disabled'));
-    assert.equal(retry.$('#prompt').val(), 'Сохрани мой вопрос');
-    assert.equal(retry.$('#selectedFiles .selected-file').length, 1);
+    assert.equal(retry.$('#prompt').val(), '');
+    assert.equal(retry.$('#selectedFiles .selected-file').length, 0);
+    assert.equal(retry.$('#chatMessages .msg.user').length, 1);
+    assert.equal(retry.$('.gpt-retry').length, 1);
+    const firstKey=retry.calls.find(c=>c.name==='GPTChat').data.x05;
     retry.$('#chatList .chat-item').trigger('click');
     await until(() => !retry.$('#sendBtn').prop('disabled'));
-    assert.equal(retry.$('#prompt').val(), 'Сохрани мой вопрос');
-    assert.equal(retry.$('#selectedFiles .selected-file').length, 1);
+    assert.equal(retry.$('.gpt-retry').length, 1,'retry survives reloading history');
     retry.setFailure(false);
-    retry.$('#sendBtn').trigger('click');
+    retry.$('.gpt-retry').trigger('click');
     await until(() => !retry.$('#sendBtn').prop('disabled'));
-    assert.equal(retry.calls.filter(c=>c.name==='GPTFileFinish').length, 1, 'retry must reuse uploaded file');
-    assert.equal(retry.$('#prompt').val(), '');
+    assert.equal(retry.calls.filter(c=>c.name==='GPTChat').at(-1).data.x05,firstKey);
+    assert.equal(retry.calls.filter(c=>c.name==='GPTFileFinish').length, 1);
+    assert.equal(retry.$('#chatMessages .msg.user').length, 1);
+    assert.equal(retry.$('.gpt-retry').length, 0);
     retry.dom.window.close();
     const ordinary = await fixture(false);
     assert.equal(ordinary.$('#gptModel').css('display'), 'none');

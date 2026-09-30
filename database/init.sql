@@ -100,3 +100,8 @@ CREATE INDEX IF NOT EXISTS data_import_history_table_time_idx
 CREATE INDEX IF NOT EXISTS data_import_history_time_idx
     ON public.data_import_history (finished_at DESC, id DESC);
 
+
+-- Idempotency keys for saved questions and their answers; old rows remain valid.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS request_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS messages_request_role_idx
+    ON messages (conversation_id, request_id, role) WHERE request_id IS NOT NULL;

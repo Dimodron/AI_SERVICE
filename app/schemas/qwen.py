@@ -63,6 +63,7 @@ class ChatCreateResponse(BaseModel):
 class ChatRequest(GenerationSettings):
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
+    request_id: UUID | None = Field(default=None, description="Ключ повторной отправки сохранённого вопроса. При повторе используйте тот же UUID, текст и вложения.")
     message: str = Field(min_length=1, max_length=8000, description="Сообщение пользователя или вопрос по прикреплённым файлам.", examples=["Опиши что на картинке"])
     file_ids: list[UUID] = Field(default_factory=list, max_length=settings.MAX_FILES, description=f"До {settings.MAX_FILES} идентификаторов файлов, полученных через POST /api/files. Для изображений нужна модель с поддержкой vision. Чтение файлов использует БД даже при save_history=false.")
     save_history: bool = Field(default=False, description="Сохранять сообщения и привязки файлов в БД. При true обязателен conversation_id, полученный через POST /api/chat/create.")
@@ -74,6 +75,8 @@ class ChatRequest(GenerationSettings):
 
     @model_validator(mode="after")
     def validate_history(self):
+        if self.request_id is not None and not self.save_history:
+            raise ValueError("request_id требует save_history=true")
         if self.user_organization == 0:
             self.user_organization = None
         if self.save_history and self.conversation_id is None:
@@ -108,6 +111,7 @@ class HistoryRequest(ChatOwner):
     message_last: int = Field(default=0, ge=0)
 
 class HistoryMessage(BaseModel):
+    request_id: UUID | None = None
     files: list[FileResponse] = Field(default_factory=list)
     role: Literal["user", "assistant", "system"]
     content: str

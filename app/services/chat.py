@@ -1,3 +1,4 @@
+from uuid import uuid4
 from database.history import connect
 from fastapi import HTTPException
 from schemas.qwen import (
@@ -70,51 +71,86 @@ async def chat(payload: ChatRequest, *, trusted_source=False, oracle_admin=None)
             )
         return ChatResponse(model=model, response=answer, files=files)
 
-    async with await connect() as connection:
+    request_id = payload.request_id or uuid4()
+
+    async def lock_conversation(connection):
         await connection.execute("SET LOCAL lock_timeout = '310s'")
-        cursor = await connection.execute(
-            "SELECT c.id, c.model, c.title FROM conversations c JOIN users u ON u.id = c.user_uuid "
-            "WHERE c.id = %s AND u.login = %s FOR UPDATE OF c",
-            (payload.conversation_id, payload.user_login),
-        )
-        conversation = await cursor.fetchone()
-        if conversation is None:
+        row = await (await connection.execute(
+            "SELECT c.id,c.model,c.title FROM conversations c JOIN users u ON u.id=c.user_uuid "
+            "WHERE c.id=%s AND u.login=%s FOR UPDATE OF c",
+            (payload.conversation_id, payload.user_login))).fetchone()
+        if row is None:
             raise HTTPException(404, "Диалог не найден")
-        model = conversation["model"]
-        if payload.model is not None and payload.model != model:
+        return row
+
+    async def existing_answer(connection, conversation):
+        row = await (await connection.execute(
+            "SELECT id,content FROM messages WHERE conversation_id=%s AND request_id=%s AND role='assistant'",
+            (payload.conversation_id, request_id))).fetchone()
+        if row is None:
+            return None
+        reports = await (await connection.execute(
+            "SELECT f.id AS file_id,f.filename,f.media_type,f.size_bytes,f.created_at,"
+            "'/api/files/' || f.id::text || '/download' AS download_url "
+            "FROM message_files mf JOIN files f ON f.id=mf.file_id WHERE mf.message_id=%s", (row["id"],))).fetchall()
+        return ChatResponse(conversation_id=payload.conversation_id, title=conversation["title"],
+                            model=conversation["model"], response=row["content"], files=reports)
+
+    # Commit the accepted question before any model call. Generation failures can
+    # roll back only the answer transaction, not the user's message or attachments.
+    async with await connect() as connection:
+        conversation = await lock_conversation(connection)
+        if payload.model is not None and payload.model != conversation["model"]:
             raise HTTPException(409, "Модель диалога отличается от запроса; переключите её через PATCH /api/chat/{id}/model")
-        model = await resolve_model(model)
+        previous = await (await connection.execute(
+            "SELECT id,content FROM messages WHERE conversation_id=%s AND request_id=%s AND role='user'",
+            (payload.conversation_id, request_id))).fetchone()
+        if previous:
+            file_rows = await (await connection.execute(
+                "SELECT file_id FROM message_files WHERE message_id=%s", (previous["id"],))).fetchall()
+            if previous["content"] != payload.message or {r["file_id"] for r in file_rows} != set(payload.file_ids):
+                raise HTTPException(409, "request_id уже использован для другого текста или вложений")
+            user_message_id = previous["id"]
+            cached = await existing_answer(connection, conversation)
+            if cached is not None:
+                return cached
+        else:
+            await file_context(connection, payload.file_ids, payload.conversation_id)
+            user_message_id = await save_message(connection, payload.conversation_id, "user",
+                                                 payload.message, payload.file_ids, request_id)
+            await connection.execute("UPDATE conversations SET last_message_at=now() WHERE id=%s",
+                                     (payload.conversation_id,))
 
-        conversation_id = conversation["id"]
+    async with await connect() as connection:
+        conversation = await lock_conversation(connection)
+        cached = await existing_answer(connection, conversation)
+        if cached is not None:
+            return cached
+        latest = await (await connection.execute(
+            "SELECT id FROM messages WHERE conversation_id=%s ORDER BY id DESC LIMIT 1",
+            (payload.conversation_id,))).fetchone()
+        if latest["id"] != user_message_id:
+            raise HTTPException(409, "В чате уже есть более новое сообщение; повторите ответ на последний вопрос")
+        model = await resolve_model(conversation["model"])
         cursor = await connection.execute(
-            "SELECT role, content FROM messages WHERE conversation_id = %s AND content <> '' "
-            "ORDER BY id DESC LIMIT 20", (conversation_id,)
-        )
-
-        history = list(reversed(await cursor.fetchall()))
-        context = await file_context(connection, payload.file_ids, conversation_id)
+            "SELECT role,content FROM messages WHERE conversation_id=%s AND id<%s AND content<>'' "
+            "ORDER BY id DESC LIMIT 20", (payload.conversation_id, user_message_id))
+        previous_messages = list(reversed(await cursor.fetchall()))
+        context = await file_context(connection, payload.file_ids, payload.conversation_id)
         profile, is_admin = await user_context(connection, payload, trusted_source, oracle_admin=oracle_admin)
         system_messages, scenarios = await load_chat_context(connection, payload.user_jurpers, is_admin=is_admin)
         system_messages.append(profile)
         answer, files = await answer_with_scenarios(
-            connection, model, payload, model_messages(system_messages, history, context, payload.message), scenarios, is_admin=is_admin,
-        )
-        await save_message(connection, conversation_id, "user", payload.message, payload.file_ids)
-        await save_message(connection, conversation_id, "assistant", answer, [file.file_id for file in files])
+            connection, model, payload, model_messages(system_messages, previous_messages, context, payload.message),
+            scenarios, is_admin=is_admin)
+        await save_message(connection, payload.conversation_id, "assistant", answer,
+                           [file.file_id for file in files], request_id)
         title = conversation["title"]
         if title is None:
-            # Retry an earlier failed title generation using the first exchange.
-            cursor = await connection.execute(
-                "SELECT content FROM messages WHERE conversation_id = %s AND content <> '' ORDER BY id LIMIT 2",
-                (conversation_id,),
-            )
-            first_exchange = await cursor.fetchall()
-            title = await generate_chat_title(model, first_exchange[0]["content"], first_exchange[1]["content"])
-        await connection.execute(
-            "UPDATE conversations SET last_message_at = now(), title = %s WHERE id = %s",
-            (title, conversation_id),
-        )
-    return ChatResponse(conversation_id=conversation_id, title=title, model=model, response=answer, files=files)
+            title = await generate_chat_title(model, payload.message, answer)
+        await connection.execute("UPDATE conversations SET last_message_at=now(),title=%s WHERE id=%s",
+                                 (title, payload.conversation_id))
+    return ChatResponse(conversation_id=payload.conversation_id, title=title, model=model, response=answer, files=files)
 
 
 async def history(payload: HistoryRequest) -> HistoryResponse:
@@ -131,7 +167,7 @@ async def history(payload: HistoryRequest) -> HistoryResponse:
 
         cursor = await connection.execute(
             """
-            SELECT id, role, content
+            SELECT id, role, content, request_id
             FROM messages
             WHERE conversation_id = %s
             ORDER BY id ASC
@@ -185,13 +221,14 @@ async def conversation_attachments(connection, conversation_id):
     return await cursor.fetchall()
 
 
-async def save_message(connection, conversation_id, role, content, file_ids):
+async def save_message(connection, conversation_id, role, content, file_ids, request_id=None):
     cursor = await connection.execute(
-        "INSERT INTO messages (conversation_id, role, content) VALUES (%s,%s,%s) RETURNING id",
-        (conversation_id, role, content),)
+        "INSERT INTO messages (conversation_id, role, content, request_id) VALUES (%s,%s,%s,%s) RETURNING id",
+        (conversation_id, role, content, request_id),)
     message_id = (await cursor.fetchone())["id"]
     for file_id in dict.fromkeys(file_ids):
         await connection.execute("INSERT INTO message_files (message_id,file_id) VALUES (%s,%s)", (message_id, file_id))
+    return message_id
 
 
 async def attach_files(conversation_id, payload):
