@@ -1,4 +1,5 @@
 from datetime import datetime
+from schemas.report_template import ReportTemplate, validate_template_sources
 from typing import Annotated
 from uuid import UUID
 
@@ -38,6 +39,7 @@ def validate_tables(tables):
 
 
 class ScenarioCreate(BaseModel):
+    report_template: ReportTemplate | None = None
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     title: str = Field(min_length=1)
@@ -56,10 +58,12 @@ class ScenarioCreate(BaseModel):
     @model_validator(mode="after")
     def validate_table_list(self):
         validate_tables(self.tables)
+        validate_template_sources(self.report_template, self.tables, self.table_name, self.columns_description)
         return self
 
 
 class ScenarioUpdate(BaseModel):
+    report_template: ReportTemplate | None = None
     model_config = ConfigDict(str_strip_whitespace=True, extra="forbid")
 
     title: str | None = Field(default=None, min_length=1)
@@ -87,6 +91,7 @@ class ScenarioUpdate(BaseModel):
 
 
 class ScenarioResponse(BaseModel):
+    report_template: ReportTemplate | None = None
     id: UUID
     title: str
     description: str | None

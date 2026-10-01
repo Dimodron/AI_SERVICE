@@ -39,6 +39,8 @@ class Settings(BaseModel):
     PG_CONNECT_TIMEOUT: PositiveInt
     MAX_ANSWER_CONTINUATIONS: PositiveInt = 3
     MAX_ANSWER_REPAIRS: PositiveInt = 2
+    MAX_TEMPLATE_ROWS: PositiveInt = 50000
+    MAX_TEMPLATE_BYTES: PositiveInt = 5242880
     MAX_TOOL_CALLS: PositiveInt
     MAX_RESULT_CHARS: PositiveInt
     DATA_IMPORT_TIMEOUT: PositiveInt

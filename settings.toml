@@ -51,3 +51,7 @@ ADMIN_IGNORE_SYSTEM_PROMPTS = true
 # Справочники названий текущего выбора Oracle/APEX. Пустая строка отключает.
 JURPERS_DIRECTORY_TABLE = "oracle_data.zv_gpt_jurpers"
 ORGANIZATION_DIRECTORY_TABLE = "oracle_data.zv_gpt_organizations"
+
+# Лимиты исходной выборки и готового файла шаблона. Превышение — ошибка без усечения.
+MAX_TEMPLATE_ROWS = 50000
+MAX_TEMPLATE_BYTES = 5242880

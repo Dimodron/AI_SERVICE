@@ -4,7 +4,7 @@ const jquery = require('jquery');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const modules = ['common','chat','prompts','scenarios','import'];
+const modules = ['common','chat','prompts','scenarios','import','templates'];
 const scripts = Object.fromEntries(modules.map(name => [name, fs.readFileSync(path.join(process.env.CHAT_UI_DIR || path.join(__dirname, '../oracle_serv'), name + '.js'), 'utf8')]));
 const cid = '11111111-1111-4111-8111-111111111111';
 const fid = '22222222-2222-4222-8222-222222222222';
@@ -80,7 +80,7 @@ async function fixture(admin = true) {
         }
     }};
     for (const name of modules) {
-        if (admin || !['prompts','scenarios','import'].includes(name)) win.eval(scripts[name]);
+        if (admin || !['prompts','scenarios','import','templates'].includes(name)) win.eval(scripts[name]);
     }
     await until(() => $('#chatStatus').text() === 'Аналитик готов к работе' && !$('#sendBtn').prop('disabled'));
     async function pick(kind) {
@@ -230,14 +230,39 @@ async function fixture(admin = true) {
         row.find('.gpt-column-description').first().val('My identifier');
         row.find('.gpt-column-use').last().prop('checked',false);
     }
+    m('[data-template="enabled"]').prop('checked',true).trigger('change');
+    m('[data-template-refresh]').trigger('click');
+    m('[data-template="title"]').val('Список');
+    m('[data-template="table_name"]').val('public.messages').trigger('change');
+    m('[data-template-add="column"]').trigger('click');
+    let templateRow=m('.gpt-template-column').last();
+    templateRow.find('[data-col="key"]').val('number');
+    templateRow.find('[data-col="title"]').val('№');
+    templateRow.find('[data-col="operation"]').val('row_number').trigger('change');
+    m('[data-template-add="column"]').trigger('click');
+    templateRow=m('.gpt-template-column').last();
+    templateRow.find('[data-col="key"]').val('record');
+    templateRow.find('[data-col="title"]').val('Запись');
+    templateRow.find('[data-col="field"]').val('id');
+    m('[data-template-add="parameter"]').trigger('click');
+    m('.gpt-template-parameter [data-col="column"]').val('id');
+    m('.gpt-template-parameter [data-col="title"]').val('Идентификатор');
+    m('.gpt-template-parameter [data-col="required"]').prop('checked',false);
     m('[data-admin-save="scenarios"]').trigger('click');
     await until(()=>m('#gpt-scenarios-list .gpt-admin-row').length===1 && !m('[data-admin-new="scenarios"]').prop('disabled'));
     saved=JSON.parse(management.calls.filter(c=>c.name==='GPTAdminSave').at(-1).data.f01.join(''));
     assert.equal(saved.tables.length,2);
+    assert.equal(saved.report_template.title,'Список');
+    assert.equal(saved.report_template.columns[0].operation,'row_number');
+    assert.equal(saved.report_template.columns[1].field,'id');
+    assert.equal(saved.report_template.parameters[0].required,false);
     assert.deepEqual(saved.tables[0].columns_description,{id:'My identifier'});
     m('#gpt-scenarios-list .gpt-admin-row button').trigger('click');
     await until(()=>m('#gpt-scenarios-edit .gpt-column-row').length===4);
     assert.equal(m('.gpt-column-description').first().val(),'My identifier','saved description survives metadata fetch');
+    assert.equal(m('[data-template="enabled"]').prop('checked'),true);
+    assert.equal(m('.gpt-template-column').length,2);
+    assert.equal(m('.gpt-template-column').last().find('[data-col="field"]').val(),'id');
     assert.equal(m('.gpt-column-use').eq(1).prop('checked'),false,'unselected columns stay unselected');
     m('#gpt-scenarios-edit [data-field="is_admin"]').prop('checked',false).trigger('change');
     await until(()=>m('.gpt-table-status').first().text().includes('недоступна'));

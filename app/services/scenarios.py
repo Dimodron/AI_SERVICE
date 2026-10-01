@@ -1,4 +1,5 @@
 from uuid import UUID
+from schemas.report_template import ReportTemplate, validate_template_sources
 
 from database.history import connect
 from services.authors import author_id
@@ -8,7 +9,7 @@ from psycopg.errors import ForeignKeyViolation
 from psycopg.types.json import Jsonb
 from schemas.scenarios import ScenarioCreate, ScenarioUpdate
 
-_COLUMNS = "id, title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin, is_active, (SELECT login FROM users WHERE users.id = scenarios.create_user) AS create_user, (SELECT login FROM users WHERE users.id = scenarios.edit_user) AS edit_user, create_time, edit_time"
+_COLUMNS = "id, report_template, title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin, is_active, (SELECT login FROM users WHERE users.id = scenarios.create_user) AS create_user, (SELECT login FROM users WHERE users.id = scenarios.edit_user) AS edit_user, create_time, edit_time"
 
 
 def _require_scenario(record):
@@ -22,10 +23,10 @@ async def create_scenario(payload: ScenarioCreate):
         async with await connect() as connection:
             creator = await author_id(connection, payload.create_user)
             cursor = await connection.execute(
-                f"INSERT INTO scenarios (title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin, is_active, create_user) "
-                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
+                f"INSERT INTO scenarios (title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin, is_active, create_user, report_template) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING {_COLUMNS}",
                 (payload.title, payload.description, payload.table_name, Jsonb(payload.columns_description), Jsonb([table.model_dump() for table in payload.tables]),
-                 payload.scenario, payload.visible_jurpers, payload.groups, payload.is_admin, payload.is_active, creator),
+                 payload.scenario, payload.visible_jurpers, payload.groups, payload.is_admin, payload.is_active, creator, Jsonb(payload.report_template.model_dump()) if payload.report_template else None),
             )
             return await cursor.fetchone()
     except ForeignKeyViolation as error:
@@ -56,6 +57,10 @@ async def get_scenario(scenario_id: UUID):
 
 async def update_scenario(scenario_id: UUID, payload: ScenarioUpdate):
     changes = payload.model_dump(exclude_unset=True)
+    # Validate merged state under the same row lock as the update below.
+    template_change = changes.get("report_template")
+    if template_change is not None:
+        changes["report_template"] = Jsonb(template_change)
     if "tables" in changes:
         changes["tables"] = Jsonb(changes["tables"])
     if "columns_description" in changes:
@@ -68,6 +73,14 @@ async def update_scenario(scenario_id: UUID, payload: ScenarioUpdate):
     ).format(assignments)
     try:
         async with await connect() as connection:
+            current = await (await connection.execute("SELECT * FROM scenarios WHERE id=%s FOR UPDATE", (scenario_id,))).fetchone()
+            _require_scenario(current)
+            merged = {**current, **payload.model_dump(exclude_unset=True)}
+            try:
+                template = ReportTemplate.model_validate(merged["report_template"]) if merged.get("report_template") else None
+                validate_template_sources(template, merged["tables"], merged["table_name"], merged["columns_description"])
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
             if "edit_user" in changes:
                 changes["edit_user"] = await author_id(connection, changes["edit_user"])
             cursor = await connection.execute(query, (*changes.values(), scenario_id))

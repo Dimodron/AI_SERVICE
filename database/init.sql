@@ -105,3 +105,5 @@ CREATE INDEX IF NOT EXISTS data_import_history_time_idx
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS request_id UUID;
 CREATE UNIQUE INDEX IF NOT EXISTS messages_request_role_idx
     ON messages (conversation_id, request_id, role) WHERE request_id IS NOT NULL;
+
+ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS report_template JSONB;

@@ -9,7 +9,7 @@ async def load_chat_context(connection, user_jurpers: int, *, is_admin: bool = F
     )
     messages = [{"role": "system", "content": row["prompt"]} for row in await cursor.fetchall()]
     cursor = await connection.execute(
-        "SELECT id, title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin "
+        "SELECT id, report_template, title, description, table_name, columns_description, tables, scenario, visible_jurpers, groups, is_admin "
         "FROM scenarios WHERE is_active AND (NOT is_admin OR %s) "
         "AND (%s OR cardinality(visible_jurpers) = 0 OR %s = ANY(visible_jurpers)) "
         "ORDER BY create_time, id", (is_admin, is_admin, user_jurpers),
@@ -27,6 +27,7 @@ async def load_chat_context(connection, user_jurpers: int, *, is_admin: bool = F
         messages.append({
             "role": "system",
             "content": (
+                "Если у сценария есть report_template, для Excel/CSV вызывай create_template_report, передавая scenario_id и parameters. Колонки, расчёты и строки задаёт сервер. Не используй create_report для обхода шаблона. Необязательные параметры можно опустить, обязательные уточни у пользователя. "
                 "Ниже справочник активных сценариев. Выбери подходящий к вопросу и следуй его "
                 "алгоритму анализа. Для фактов из БД вызывай query_scenario, затем анализируй "
                 "полученные строки и формируй конечный ответ. Можно выполнить несколько запросов. "

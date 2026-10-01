@@ -8,6 +8,8 @@ from uuid import uuid4
 from fastapi import HTTPException
 from pydantic import ValidationError
 from schemas.model_answer import ModelAnswer
+from schemas.report_template import TemplateReportRequest
+from services.template_reports import create_template_report
 from psycopg import sql
 from psycopg.errors import DataError, ProgrammingError, QueryCanceled
 from schemas.qwen import ChatRequest
@@ -33,6 +35,15 @@ QUERY_TOOL = {
     },
 }
 
+TEMPLATE_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "create_template_report",
+        "description": "Создать полный Excel/CSV по report_template сценария. Передай scenario_id и параметры (строки); колонки, вычисления, структуру и ссылки формирует сервер. Обязательные параметры уточни, не выдумывай.",
+        "parameters": TemplateReportRequest.model_json_schema(),
+    },
+}
+
 REPORT_TOOL = {
     "type": "function",
     "function": {
@@ -55,7 +66,7 @@ def _table_parts(name: str, *, allow_internal: bool = False) -> tuple[str, str]:
     return schema, table
 
 
-async def query_scenario(connection, scenario: dict, query: ScenarioQuery, payload: ChatRequest, *, is_admin: bool = False) -> dict:
+async def query_scenario(connection, scenario: dict, query: ScenarioQuery, payload: ChatRequest, *, is_admin: bool = False, export_limit: int | None = None) -> dict:
     if scenario.get("is_admin", False) and not is_admin:
         raise ValueError("Сценарий доступен только администратору")
     # Ownership predicates are fixed by the application, never by the model.
@@ -142,7 +153,8 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
     if query.group_by:
         statement += sql.SQL(" GROUP BY ") + sql.SQL(", ").join(column(name) for name in query.group_by)
     statement += sql.SQL(" LIMIT %s")
-    params.append(query.limit + 1)
+    row_limit = export_limit if export_limit is not None else query.limit
+    params.append(row_limit + 1)
     # A savepoint keeps a failed model query from breaking history writes.
     async with connection.transaction():
         cursor = await connection.execute("SELECT current_setting('statement_timeout') AS timeout")
@@ -151,8 +163,8 @@ async def query_scenario(connection, scenario: dict, query: ScenarioQuery, paylo
         cursor = await connection.execute(statement, params)
         rows = await cursor.fetchall()
         await connection.execute("SELECT set_config('statement_timeout', %s, true)", (previous_timeout,))
-    result = {"rows": rows[:query.limit], "truncated": len(rows) > query.limit}
-    if len(json.dumps(result, ensure_ascii=False, default=str)) > MAX_RESULT_CHARS:
+    result = {"rows": rows[:row_limit], "truncated": len(rows) > row_limit}
+    if export_limit is None and len(json.dumps(result, ensure_ascii=False, default=str)) > MAX_RESULT_CHARS:
         raise ValueError("Результат слишком большой: уменьши limit, выбери меньше колонок или используй агрегаты")
     result["source"] = {"table": source["table_name"], "filters": [item.model_dump() for item in query.filters],
                         "jurpers": None if is_admin else payload.user_jurpers,
@@ -169,7 +181,8 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
     messages.insert(index, {
         "role": "system",
         "content": (
-            "Если пользователь просит отчёт или файл, вызови create_report в формате xlsx, csv "
+            "Если у подходящего сценария есть report_template, для Excel/CSV вызывай create_template_report. "
+            "Для остальных отчётов или файлов вызови create_report в формате xlsx, csv "
             "или docx. Для данных из БД сначала вызови query_scenario, затем передай его "
             "query_result_id в create_report: не переписывай строки вручную. "
             "Не выдавай неполную выборку за полный отчёт. Для текстового документа передай text. "
@@ -211,9 +224,15 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
     if is_admin:
         query_tool = {**QUERY_TOOL, "function": {**QUERY_TOOL["function"],
                       "description": "Чтение данных активного сценария. Администратору доступны все юрлица; для конкретного юрлица или организации укажи filters. Поддерживает агрегаты и группировку."}}
-    tools = [REPORT_TOOL, *([query_tool] if scenarios else [])]
+    templates_available = any(s.get("report_template") for s in scenarios.values())
+    tools = [REPORT_TOOL, *([query_tool] if scenarios else []), *([TEMPLATE_TOOL] if templates_available else [])]
     files: list[ReportResponse] = []
     query_results = {}
+    template_summaries = []
+    requested_template_file = templates_available and bool(re.search(
+        r"(?:созда[йть]|сформир(?:уй|овать)|сдела[йть]|предостав[ьить]|выгруз[иить]|дай|отда[йть]|получить)[\s\S]{0,160}(?:файл|excel|xlsx|csv)"
+        r"|(?:в формате|в файл|в excel|в xlsx|в csv)", payload.message, re.IGNORECASE))
+
     calls_used = 0
     repairs = 0
     continuations = 0
@@ -270,6 +289,17 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
                     "Не повторяй успешно выполненные действия. Если без уточнения продолжить нельзя, "
                     "верни status=needs_clarification с конкретным вопросом."})
                 continue
+            if parsed.status == "completed" and requested_template_file and not files:
+                if continuations >= settings.MAX_ANSWER_CONTINUATIONS:
+                    return exhausted("Модель не создала запрошенный файл. Попробуйте уточнить шаблон и параметры.")
+                continuations += 1
+                messages.append({"role": "assistant", "content": reply["content"]})
+                messages.append({"role": "user", "content":
+                    "Запрошен файл, но успешного создания файла нет. Вызови create_template_report "
+                    "с подходящим сценарием и параметрами. Если обязательных параметров не хватает "
+                    "или подходящего шаблона нет, верни needs_clarification с конкретным вопросом. "
+                    "Не утверждай, что файл создан, без успешного результата инструмента."})
+                continue
             return finish(parsed.response)
         if calls_used + len(calls) > MAX_TOOL_CALLS:
             raise HTTPException(422, "Модель превысила лимит вызовов инструментов; уточните вопрос")
@@ -278,7 +308,16 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
             function = call["function"]
             calls_used += 1
             try:
-                if function["name"] == "query_scenario":
+                if function["name"] == "create_template_report":
+                    request = TemplateReportRequest.model_validate(function["arguments"])
+                    scenario = scenarios.get(str(request.scenario_id))
+                    if scenario is None:
+                        raise ValueError("Сценарий отсутствует или недоступен")
+                    file, summary = await create_template_report(connection, scenario, request, payload, is_admin=is_admin)
+                    files.append(file)
+                    template_summaries.append(summary)
+                    result = file.model_dump(mode="json")
+                elif function["name"] == "query_scenario":
                     query = ScenarioQuery.model_validate(function["arguments"])
                     scenario = scenarios.get(str(query.scenario_id))
                     if scenario is None:
@@ -327,3 +366,6 @@ async def answer_with_scenarios(connection, model: str, payload: ChatRequest, me
                 "role": "tool", "tool_name": function["name"],
                 "content": json.dumps(result, ensure_ascii=False, default=str),
             })
+
+        if template_summaries:
+            return finish("\n\n".join(template_summaries))
