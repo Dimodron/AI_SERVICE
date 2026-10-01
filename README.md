@@ -14,12 +14,22 @@ docker compose up --build -d
 
 Swagger: http://localhost:8282/docs
 
-Compose запускает API и PostgreSQL; Ollama используется на существующем сервере.
-Адрес можно изменить через `QWEN_URL` в `.env` или окружении:
+Compose запускает API, PostgreSQL, Ollama с NVIDIA GPU и одноразовый загрузчик модели.
+Для GPU на сервере нужны NVIDIA-драйвер и NVIDIA Container Toolkit:
+https://docs.ollama.com/docker .
+Все сервисы используют общую сеть Compose; API обращается к `http://ollama:11434`.
+Загрузчик ждёт успешного `ollama list`, проверяет наличие модели и при необходимости
+скачивает её. API запускается после успешного завершения загрузчика и готовности PostgreSQL.
+При ошибке загрузки проверьте `docker compose logs qwen-loader`; после исправления
+повторите `docker compose up --build -d`. Выход загрузчика с кодом 0 — нормальное состояние.
 
-```bash
-QWEN_URL=http://192.168.68.56:11434 docker compose up --build -d
-```
+В `.env` можно задать `OLLAMA_IMAGE`, `OLLAMA_MODEL` (по умолчанию `qwen3.5:9b`)
+и `OLLAMA_VOLUME_NAME`. `OLLAMA_MODEL` управляет загрузкой, а `DEFAULT_MODEL`
+в `settings.toml` — выбором модели для новых чатов; при смене модели согласуйте оба значения.
+Существующая модель автоматически не обновляется. Для обновления используйте
+`docker compose exec ollama ollama pull <имя-модели>`.
+`QWEN_URL` в `.env` переопределяет адрес из settings.toml; для встроенной Ollama
+задайте `QWEN_URL=http://ollama:11434`.
 
 Остановка: `docker compose down`.
 
@@ -395,16 +405,36 @@ UPDATE users SET is_admin = TRUE WHERE login = 'admin_login';
 Порядок обновления Oracle описан в `oracle_serv/README.md`.
 
 
-## Сеть внешнего контейнера Ollama
+## Переход с отдельного контейнера Ollama
 
-API подключён к внешней сети `queen-ai` и к своей сети `default` для PostgreSQL.
-Перед первым запуском создайте сеть: `docker network create queen-ai`
-(если она уже существует, повторять не нужно). Подключите внешний контейнер:
-`docker network connect --alias ollama queen-ai ollama`. При `QWEN_URL=http://ollama:11434`
-оба контейнера должны находиться в этой сети. API подключается автоматически через
-compose.yaml после пересоздания. Для сохранения подключения Ollama при её пересоздании
-добавьте внешнюю сеть queen-ai также в Compose/настройки запуска самой Ollama.
-Документация: https://docs.docker.com/compose/how-tos/networking/
+Перед первым запуском нового Compose на сервере определите хранилище прежней Ollama:
+
+```bash
+docker inspect ollama --format '{{range .Mounts}}{{println .Type .Name .Source "->" .Destination}}{{end}}'
+```
+
+Если `/root/.ollama` смонтирован как `volume`, укажите его точное имя в
+`OLLAMA_VOLUME_NAME` файла `.env`. Если используется `bind`, замените в сервисе
+`ollama` источник монтирования на прежний абсолютный путь, сохранив `/root/.ollama`
+как назначение. Без этого новый том будет пустым, модели потребуется загрузить заново.
+
+Остановите прежний контейнер, чтобы освободить порт 11434, затем запустите Compose:
+
+```bash
+docker stop ollama
+docker compose up --build -d
+docker compose logs --tail=50 qwen-loader
+docker compose exec ollama ollama list
+curl --fail http://127.0.0.1:8282/api/models
+```
+
+Старый контейнер и его хранилище сохраняются. Отключите его автоматический запуск
+в прежнем способе развёртывания, чтобы после перезапуска сервера он не занял порт 11434.
+Не запускайте две Ollama одновременно с одним хранилищем.
+API больше не требует внешней сети `queen-ai`. Если Open WebUI подключён к старой
+Ollama по этой сети, его подключение нужно перенастроить на новый сервис (например,
+подключить WebUI к сети этого Compose и использовать `http://ollama:11434`).
+Не выполняйте `docker compose down -v`, если нужно сохранить данные PostgreSQL и модели.
 
 Фильтры импорта сопоставляются с колонками Oracle без учёта регистра, затем SQL использует
 точное имя из метаданных. Поддерживаются как `LOGIN`, так и quoted-колонка `"login"`.
