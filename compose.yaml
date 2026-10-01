@@ -19,8 +19,8 @@ services:
       ORACLE_PASS: ${ORACLE_PASS:-}
       ORACLE_NAME: ${ORACLE_NAME:-}
       ORACLE_SCHEMA: ${ORACLE_SCHEMA:-APXWS}
-      PGHOST: postgres
-      PGPORT: "5432"
+      PGHOST: ${PGHOST:-postgres}
+      PGPORT: ${PGPORT:-5432}
       PGDATABASE: ${POSTGRES_DB:-qwen}
       PGUSER: ${POSTGRES_USER:-qwen}
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}

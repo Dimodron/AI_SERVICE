@@ -28,8 +28,9 @@ https://docs.ollama.com/docker .
 в `settings.toml` — выбором модели для новых чатов; при смене модели согласуйте оба значения.
 Существующая модель автоматически не обновляется. Для обновления используйте
 `docker compose exec ollama ollama pull <имя-модели>`.
-`QWEN_URL` в `.env` переопределяет адрес из settings.toml; для встроенной Ollama
-задайте `QWEN_URL=http://ollama:11434`.
+Адрес Ollama задаётся через `QWEN_URL` в `.env`: для встроенного сервиса
+используйте `QWEN_URL=http://ollama:11434`. Адреса и учётные данные подключений
+хранятся в `.env`, а лимиты и поведение API — в `settings.toml`.
 
 Остановка: `docker compose down`.
 
@@ -331,10 +332,14 @@ MAX_FILES = 5            # вложений суммарно на чат
 MAX_TEXT_CHARS = 3000000 # извлечённого текста на файл и суммарно на чат
 ```
 
-Там же настраиваются размеры изображений, ограничения Excel, адрес и таймауты Ollama,
+Там же настраиваются размеры изображений, ограничения Excel, таймауты Ollama,
 таймаут генерации заголовка, пул PostgreSQL, число вызовов инструментов нейросети,
 размер результата сценария и таймаут импорта Oracle. Пароли, логины, токены и реквизиты
-подключения PostgreSQL/Oracle остаются в `.env`.
+подключения PostgreSQL/Oracle и адрес `QWEN_URL` находятся в `.env`.
+`PGHOST=postgres` и `PGPORT=5432` указывают на PostgreSQL этого Compose;
+`POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` используются для БД и подключения API.
+После изменения `.env` пересоздайте API: `docker compose up -d --force-recreate api`.
+Обычный `restart` новые переменные окружения не применяет.
 
 При первом обновлении выполните `docker compose up -d --build api`.
 После этого файл подключён в контейнер напрямую: для применения изменений достаточно
@@ -344,9 +349,9 @@ MAX_TEXT_CHARS = 3000000 # извлечённого текста на файл �
 задать переменной `SETTINGS_FILE`.
 
 Для совместимости непустые переменные окружения `MAX_FILE_BYTES`, `MAX_FILES`,
-`PG_POOL_SIZE`, `QWEN_URL`, `DATA_IMPORT_TIMEOUT` имеют приоритет над файлом.
+`PG_POOL_SIZE`, `DATA_IMPORT_TIMEOUT` имеют приоритет над файлом.
 **Удалите эти строки из старого `.env`, если хотите управлять ими только через
-`settings.toml`, затем один раз выполните `docker compose up -d --force-recreate api`.**
+`settings.toml` (это не относится к `QWEN_URL`), затем один раз выполните `docker compose up -d --force-recreate api`.**
 
 `GET /api/files/limits`, проверка ChatRequest, сервис вложений и сообщения об ошибках
 используют одни значения. Oracle/APEX получает лимиты через этот маршрут: после перезапуска

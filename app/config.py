@@ -22,7 +22,7 @@ class Settings(BaseModel):
     MAX_EXCEL_UNPACKED_BYTES: PositiveInt
     MAX_EXCEL_ROWS: PositiveInt
     MAX_EXCEL_COLUMNS: PositiveInt
-    QWEN_URL: str = Field(min_length=1)
+    QWEN_URL: str = Field(default="http://ollama:11434", min_length=1)
     DEFAULT_MODEL: str = Field(default="qwen3.5:9b", min_length=1, pattern=r"\S")
     QWEN_NUM_CTX: PositiveInt = 16384
     QWEN_CONNECT_TIMEOUT: PositiveInt
