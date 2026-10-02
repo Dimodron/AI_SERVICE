@@ -16,11 +16,11 @@ MAX_EXCEL_COLUMNS = 100
 DEFAULT_MODEL = "qwen3.5:9b"
 
 # Контекст в токенах: инструкции, история, данные и генерация.
-QWEN_NUM_CTX = 50384
+QWEN_NUM_CTX = 262144
 
 # HTTP-клиент нейросети. Адрес QWEN_URL задан в compose.yaml.
 QWEN_CONNECT_TIMEOUT = 10
-QWEN_READ_TIMEOUT = 300
+QWEN_READ_TIMEOUT = 600
 QWEN_WRITE_TIMEOUT = 30
 QWEN_POOL_TIMEOUT = 10
 QWEN_METADATA_TIMEOUT = 10
@@ -54,3 +54,7 @@ ORGANIZATION_DIRECTORY_TABLE = "oracle_data.zv_gpt_organizations"
 # Лимиты исходной выборки и готового файла шаблона. Превышение — ошибка без усечения.
 MAX_TEMPLATE_ROWS = 50000
 MAX_TEMPLATE_BYTES = 5242880
+
+# Временная диагностика: размеры, хеши, наличие маркеров; текст файлов не пишется в лог.
+CONTEXT_DIAGNOSTICS = false
+CONTEXT_DIAGNOSTIC_MARKERS = ["CONTROL-A", "BETA", "CONTROL-B", "CONTROL-C", "итоговый множитель", "58321", "END-MARKER", "FALCON-731", "91827", "NEPTUNE-442", "[0173]", "[2048]", "[3999]", "[6127]", "[7750]", "[7999]", "[8000]"]

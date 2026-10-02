@@ -2,6 +2,7 @@ import base64
 import io
 import json
 from config import settings
+from services.context_diagnostics import log_event, text_metrics
 from pathlib import Path
 from uuid import UUID, uuid4
 from zipfile import ZipFile
@@ -113,6 +114,9 @@ async def upload_file(upload: UploadFile) -> dict:
         raise HTTPException(422, 'Не удалось прочитать файл: проверьте формат и кодировку') from exc
 
     file_id = uuid4()
+    if settings.CONTEXT_DIAGNOSTICS:
+        log_event("file_extracted", file_id=str(file_id), source_bytes=len(content),
+                  **text_metrics(text, settings.CONTEXT_DIAGNOSTIC_MARKERS))
     async with await connect() as connection:
         cursor = await connection.execute(
             f'INSERT INTO files (id, filename, media_type, size_bytes, extracted_text, content) '
@@ -168,6 +172,9 @@ async def file_context(connection, file_ids: list[UUID], conversation_id: UUID |
     images = []
     for key in identifiers:
         record = records[key]
+        if settings.CONTEXT_DIAGNOSTICS:
+            log_event("file_from_database", file_id=str(key),
+                      **text_metrics(record['extracted_text'], settings.CONTEXT_DIAGNOSTIC_MARKERS))
         if record['image_content'] is not None:
             encoded = await run_in_threadpool(base64.b64encode, record['image_content'])
             images.append(encoded.decode('ascii'))

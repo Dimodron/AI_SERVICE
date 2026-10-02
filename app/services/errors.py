@@ -38,6 +38,13 @@ async def service_error(request: Request, error: Exception):
                 reason = nested.get("error", nested)
         if isinstance(reason, dict):
             reason = reason.get("message")
+        if isinstance(reason, str) and any(part in reason.lower() for part in (
+            "exceeds the available context size", "prompt is longer than the context length", "exceeds the context length",
+        )):
+            detail = ("Файл, история и инструкции не помещаются в контекст модели. "
+                      "Анализ не выполнен: молчаливое усечение отключено. "
+                      "Сократите объём данных либо используйте достаточное окно контекста "
+                      "с учётом возможностей модели и памяти сервера.")
         if isinstance(reason, str) and reason.strip():
             detail += ": " + " ".join(reason.split())[:1000]
         logger.warning(

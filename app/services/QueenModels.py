@@ -1,4 +1,6 @@
 from contextlib import asynccontextmanager
+from uuid import uuid4
+from services.context_diagnostics import log_event, request_metrics
 from config import settings
 
 import httpx
@@ -124,16 +126,20 @@ class QwenStrategy:
             include={"think", "options", "keep_alive"}, exclude_none=True,
         )
         generation["options"] = {"num_ctx": settings.QWEN_NUM_CTX, **generation.get("options", {})}
-        response = await _client.post(
-            f"/api/{endpoint}",
-            json={
-                "model": self.model,
-                **payload,
-                "stream": False,
-                "keep_alive": "30m",
-                **generation,
-            },
-        )
+        body = {
+            "model": self.model, **payload, "stream": False,
+            "keep_alive": "30m", **generation,
+            # Ollama otherwise silently retains a prefix and tail on overflow.
+            # Never present a partial file as a fully analysed document.
+            "truncate": False,
+        }
+        audit_id = str(uuid4()) if settings.CONTEXT_DIAGNOSTICS else None
+        if audit_id:
+            log_event("llm_request", audit_id=audit_id, endpoint=endpoint,
+                      **request_metrics(body, settings.CONTEXT_DIAGNOSTIC_MARKERS))
+        response = await _client.post(f"/api/{endpoint}", json=body)
+        if audit_id:
+            log_event("llm_http_response", audit_id=audit_id, status=response.status_code)
         if response.status_code == 404:
             raise HTTPException(422, f"Модель {self.model} не установлена в Ollama")
         response.raise_for_status()
@@ -143,6 +149,11 @@ class QwenStrategy:
             raise QwenResponseError("Некорректный JSON от Ollama") from exc
         if not isinstance(data, dict) or data.get("done") is not True:
             raise QwenResponseError("Некорректный ответ Ollama")
+        if audit_id:
+            log_event("llm_result", audit_id=audit_id,
+                      prompt_eval_count=data.get("prompt_eval_count"),
+                      prompt_eval_cached_count=data.get("prompt_eval_cached_count"),
+                      eval_count=data.get("eval_count"), done_reason=data.get("done_reason"))
         return data
 
 

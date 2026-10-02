@@ -25,6 +25,8 @@ class Settings(BaseModel):
     QWEN_URL: str = Field(default="http://ollama:11434", min_length=1)
     DEFAULT_MODEL: str = Field(default="qwen3.5:9b", min_length=1, pattern=r"\S")
     QWEN_NUM_CTX: PositiveInt = 16384
+    CONTEXT_DIAGNOSTICS: bool = False
+    CONTEXT_DIAGNOSTIC_MARKERS: list[str] = Field(default_factory=list)
     QWEN_CONNECT_TIMEOUT: PositiveInt
     QWEN_READ_TIMEOUT: PositiveInt
     QWEN_WRITE_TIMEOUT: PositiveInt
