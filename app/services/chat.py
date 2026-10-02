@@ -1,4 +1,5 @@
 from uuid import uuid4
+
 from database.history import connect
 from fastapi import HTTPException
 from schemas.qwen import (
@@ -9,12 +10,12 @@ from schemas.qwen import (
     HistoryRequest,
     HistoryResponse,
 )
-from services.user_context import user_context
 from services.chat_context import load_chat_context
 from services.chat_title import generate_chat_title
 from services.files import file_context
 from services.QueenModels import QwenStrategy, resolve_model
 from services.scenario_runner import answer_with_scenarios
+from services.user_context import user_context
 
 
 async def create_chat(payload: ChatCreateRequest) -> ChatCreateResponse:

@@ -14,23 +14,29 @@ docker compose up --build -d
 
 Swagger: http://localhost:8282/docs
 
-Compose запускает API, PostgreSQL, Ollama с NVIDIA GPU и одноразовый загрузчик модели.
+Compose запускает API, PostgreSQL и Ollama с NVIDIA GPU.
 Для GPU на сервере нужны NVIDIA-драйвер и NVIDIA Container Toolkit:
 https://docs.ollama.com/docker .
 Все сервисы используют общую сеть Compose; API обращается к `http://ollama:11434`.
-Загрузчик ждёт успешного `ollama list`, проверяет наличие модели и при необходимости
-скачивает её. API запускается после успешного завершения загрузчика и готовности PostgreSQL.
-При ошибке загрузки проверьте `docker compose logs qwen-loader`; после исправления
-повторите `docker compose up --build -d`. Выход загрузчика с кодом 0 — нормальное состояние.
+API запускается после готовности Ollama и PostgreSQL. Модели автоматически не скачиваются.
+После запуска загрузите нужную модель вручную, например:
 
-В `.env` можно задать `OLLAMA_IMAGE`, `OLLAMA_MODEL` (по умолчанию `qwen3.5:9b`)
-и `OLLAMA_VOLUME_NAME`. `OLLAMA_MODEL` управляет загрузкой, а `DEFAULT_MODEL`
-в `settings.toml` — выбором модели для новых чатов; при смене модели согласуйте оба значения.
-Существующая модель автоматически не обновляется. Для обновления используйте
-`docker compose exec ollama ollama pull <имя-модели>`.
-Адрес Ollama задаётся через `QWEN_URL` в `.env`: для встроенного сервиса
-используйте `QWEN_URL=http://ollama:11434`. Адреса и учётные данные подключений
-хранятся в `.env`, а лимиты и поведение API — в `settings.toml`.
+```bash
+docker compose exec ollama ollama pull qwen3.5:9b
+docker compose exec ollama ollama list
+```
+
+В `settings.toml` задайте `DEFAULT_MODEL` равным имени скачанной модели.
+До загрузки выбранной модели запросы к ней вернут ошибку о том, что она не установлена.
+Образ `ollama/ollama:latest` закреплён в `compose.yaml`. Все модели, скачанные
+через этот сервис Ollama, сохраняются в Docker-томе `queenapi_ollama_data`,
+подключённом к `/root/.ollama` внутри контейнера. Дополнительные модели
+скачиваются командой `docker compose exec ollama ollama pull <имя-модели>`.
+Для обновления модели также используйте `docker compose exec ollama ollama pull <имя-модели>`.
+Адрес Ollama закреплён в `compose.yaml`: `QWEN_URL: http://ollama:11434`.
+`ollama` — имя сервиса в общей сети Compose. В `.env` этот адрес не нужен.
+Подключения PostgreSQL/Oracle и токены хранятся в `.env`,
+а лимиты и поведение API — в `settings.toml`.
 
 Остановка: `docker compose down`.
 
@@ -335,7 +341,8 @@ MAX_TEXT_CHARS = 3000000 # извлечённого текста на файл �
 Там же настраиваются размеры изображений, ограничения Excel, таймауты Ollama,
 таймаут генерации заголовка, пул PostgreSQL, число вызовов инструментов нейросети,
 размер результата сценария и таймаут импорта Oracle. Пароли, логины, токены и реквизиты
-подключения PostgreSQL/Oracle и адрес `QWEN_URL` находятся в `.env`.
+подключения PostgreSQL/Oracle находятся в `.env`.
+Адрес Ollama (`QWEN_URL`) закреплён в `compose.yaml`.
 `PGHOST=postgres` и `PGPORT=5432` указывают на PostgreSQL этого Compose;
 `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` используются для БД и подключения API.
 После изменения `.env` пересоздайте API: `docker compose up -d --force-recreate api`.
@@ -351,7 +358,7 @@ MAX_TEXT_CHARS = 3000000 # извлечённого текста на файл �
 Для совместимости непустые переменные окружения `MAX_FILE_BYTES`, `MAX_FILES`,
 `PG_POOL_SIZE`, `DATA_IMPORT_TIMEOUT` имеют приоритет над файлом.
 **Удалите эти строки из старого `.env`, если хотите управлять ими только через
-`settings.toml` (это не относится к `QWEN_URL`), затем один раз выполните `docker compose up -d --force-recreate api`.**
+`settings.toml`, затем один раз выполните `docker compose up -d --force-recreate api`.**
 
 `GET /api/files/limits`, проверка ChatRequest, сервис вложений и сообщения об ошибках
 используют одни значения. Oracle/APEX получает лимиты через этот маршрут: после перезапуска
@@ -419,7 +426,7 @@ docker inspect ollama --format '{{range .Mounts}}{{println .Type .Name .Source "
 ```
 
 Если `/root/.ollama` смонтирован как `volume`, укажите его точное имя в
-`OLLAMA_VOLUME_NAME` файла `.env`. Если используется `bind`, замените в сервисе
+`volumes.ollama_data.name` файла `compose.yaml`. Если используется `bind`, замените в сервисе
 `ollama` источник монтирования на прежний абсолютный путь, сохранив `/root/.ollama`
 как назначение. Без этого новый том будет пустым, модели потребуется загрузить заново.
 
@@ -428,7 +435,6 @@ docker inspect ollama --format '{{range .Mounts}}{{println .Type .Name .Source "
 ```bash
 docker stop ollama
 docker compose up --build -d
-docker compose logs --tail=50 qwen-loader
 docker compose exec ollama ollama list
 curl --fail http://127.0.0.1:8282/api/models
 ```

@@ -18,7 +18,7 @@ DEFAULT_MODEL = "qwen3.5:9b"
 # Контекст в токенах: инструкции, история, данные и генерация.
 QWEN_NUM_CTX = 50384
 
-# HTTP-клиент нейросети. Адрес QWEN_URL задаётся в .env.
+# HTTP-клиент нейросети. Адрес QWEN_URL задан в compose.yaml.
 QWEN_CONNECT_TIMEOUT = 10
 QWEN_READ_TIMEOUT = 300
 QWEN_WRITE_TIMEOUT = 30

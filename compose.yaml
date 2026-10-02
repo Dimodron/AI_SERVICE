@@ -6,7 +6,7 @@ services:
     volumes:
       - ./settings.toml:/srv/settings.toml:ro
     environment:
-      QWEN_URL: ${QWEN_URL:-http://ollama:11434}
+      QWEN_URL: http://ollama:11434
       MAX_FILES: ${MAX_FILES:-}
       MAX_FILE_BYTES: ${MAX_FILE_BYTES:-}
       PG_POOL_SIZE: ${PG_POOL_SIZE:-}
@@ -25,14 +25,14 @@ services:
       PGUSER: ${POSTGRES_USER:-qwen}
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     depends_on:
-      qwen-loader:
-        condition: service_completed_successfully
+      ollama:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     restart: unless-stopped
 
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
+    image: ollama/ollama:latest
     restart: unless-stopped
     ports:
       - "11434:11434"
@@ -51,19 +51,6 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-
-  qwen-loader:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:latest}
-    depends_on:
-      ollama:
-        condition: service_healthy
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b}
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - 'ollama show "$$OLLAMA_MODEL" >/dev/null 2>&1 || ollama pull "$$OLLAMA_MODEL"'
-    restart: "no"
 
   postgres:
     image: postgres:17
@@ -88,4 +75,4 @@ volumes:
   postgres_data:
 
   ollama_data:
-    name: ${OLLAMA_VOLUME_NAME:-queenapi_ollama_data}
+    name: queenapi_ollama_data
